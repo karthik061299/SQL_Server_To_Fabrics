@@ -87,3 +87,69 @@ class SQLServerToFabricReconTest:
             self.logger.error(f"Failed to connect to SQL Server: {str(e)}")
             self.results['errors'].append(f"SQL Server connection error: {str(e)}")
             return False
+    
+    def create_fabric_connection(self) -> bool:
+        """
+        Create connection to Microsoft Fabric
+        
+        Returns:
+            bool: True if connection successful, False otherwise
+        """
+        try:
+            # Using Azure SQL Database connection for Fabric SQL Endpoint
+            connection_string = (
+                f"DRIVER={{{self.config['fabric']['driver']}}};"
+                f"SERVER={self.config['fabric']['server']};"
+                f"DATABASE={self.config['fabric']['database']};"
+                f"Authentication=ActiveDirectoryIntegrated;"
+            )
+            
+            self.fabric_conn = pyodbc.connect(connection_string)
+            self.logger.info("Fabric connection established successfully")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to connect to Fabric: {str(e)}")
+            self.results['errors'].append(f"Fabric connection error: {str(e)}")
+            return False
+    
+    def execute_sql_server_procedure(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        Execute the uspSemanticClaimTransactionMeasuresData stored procedure on SQL Server
+        
+        Args:
+            start_date (str): Job start datetime
+            end_date (str): Job end datetime
+            
+        Returns:
+            pd.DataFrame: Results from SQL Server execution
+        """
+        try:
+            cursor = self.sql_server_conn.cursor()
+            
+            # Execute the stored procedure
+            exec_query = """
+            EXEC [Semantic].[uspSemanticClaimTransactionMeasuresData] 
+                @pJobStartDateTime = ?, 
+                @pJobEndDateTime = ?
+            """
+            
+            self.logger.info(f"Executing SQL Server procedure with dates: {start_date} to {end_date}")
+            cursor.execute(exec_query, start_date, end_date)
+            
+            # Fetch results
+            columns = [column[0] for column in cursor.description]
+            data = cursor.fetchall()
+            
+            df = pd.DataFrame.from_records(data, columns=columns)
+            
+            self.logger.info(f"SQL Server procedure executed successfully. Rows returned: {len(df)}")
+            self.results['sql_server_data'] = df
+            
+            cursor.close()
+            return df
+            
+        except Exception as e:
+            self.logger.error(f"Error executing SQL Server procedure: {str(e)}")
+            self.results['errors'].append(f"SQL Server execution error: {str(e)}")
+            return pd.DataFrame()
