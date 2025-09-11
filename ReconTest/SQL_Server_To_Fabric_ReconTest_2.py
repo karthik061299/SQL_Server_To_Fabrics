@@ -356,3 +356,16 @@ class EnhancedSQLServerToFabricRecon:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         hash_input = f"{timestamp}_{os.getpid()}"
         return f"recon_{timestamp}_{hashlib.md5(hash_input.encode()).hexdigest()[:8]}"
+    
+    def _retry_with_backoff(self, func, *args, **kwargs):
+        """Execute function with retry and exponential backoff"""
+        for attempt in range(self.config.retry_attempts):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                if attempt == self.config.retry_attempts - 1:
+                    raise e
+                
+                delay = self.config.retry_delay * (2 ** attempt)
+                self.logger.warning(f"Attempt {attempt + 1} failed: {str(e)}. Retrying in {delay}s...")
+                time.sleep(delay)
