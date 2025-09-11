@@ -380,3 +380,83 @@ class TestUspSemanticClaimTransactionMeasuresData:
         
         assert result is not None
         mock_cursor.execute.assert_called_once()
+        
+    # Helper Methods
+    def _execute_fabric_query(self, connection, start_date, end_date):
+        """Helper method to execute Fabric SQL query"""
+        cursor = connection.cursor()
+        
+        # Fabric SQL uses different parameter syntax
+        query = """
+        SELECT *
+        FROM Semantic.ClaimTransactionMeasures
+        WHERE (@pJobStartDateTime = '1900-01-01' AND @pJobStartDateTime = '1700-01-01')
+           OR LoadUpdateDate >= @pJobStartDateTime
+           AND LoadUpdateDate <= @pJobEndDateTime
+        """
+        
+        # Convert dates to Fabric SQL compatible format
+        params = {
+            '@pJobStartDateTime': start_date.strftime('%Y-%m-%d') if isinstance(start_date, datetime.datetime) else start_date,
+            '@pJobEndDateTime': end_date.strftime('%Y-%m-%d') if isinstance(end_date, datetime.datetime) else end_date
+        }
+        
+        cursor.execute(query, params)
+        return cursor.fetchall()
+    
+    def _generate_fabric_hash_value(self, data_dict):
+        """Helper method to generate hash value using Fabric SQL compatible algorithm"""
+        hash_input = '~'.join([str(v) for v in data_dict.values()])
+        return hashlib.sha512(hash_input.encode()).hexdigest()[:128]
+    
+    def _process_revision_number(self, data):
+        """Helper method to process revision number"""
+        if data.get('RevisionNumber') is None:
+            data['RevisionNumber'] = 0
+        return data
+    
+    def _handle_null_values(self, data):
+        """Helper method to handle NULL values"""
+        null_to_default = {
+            'PolicyRiskStateWCKey': -1,
+            'AgencyKey': -1
+        }
+        
+        for key, default_value in null_to_default.items():
+            if data.get(key) is None:
+                data[key] = default_value
+        
+        return data
+    
+    def _sanitize_string_data(self, data):
+        """Helper method to sanitize string data for Fabric SQL"""
+        for key, value in data.items():
+            if isinstance(value, str):
+                # Fabric SQL specific string sanitization
+                data[key] = value.replace("'", "''").replace('"', '""')
+        return data
+    
+    def _create_fabric_connection(self, config):
+        """Create a connection to Fabric SQL"""
+        from fabric_sql_connector import FabricSQLConnector
+        
+        conn = FabricSQLConnector(
+            workspace_name=config['workspace_name'],
+            server_endpoint=config['server_endpoint'],
+            database_name=config['database_name'],
+            authentication=config['authentication'],
+            timeout=config['timeout']
+        )
+        return conn
+    
+    def _execute_delta_lake_query(self, connection, query, start_date, end_date):
+        """Execute a Delta Lake query in Fabric"""
+        cursor = connection.cursor()
+        cursor.execute(query, (start_date, end_date))
+        return cursor.fetchall()
+    
+    def _execute_partition_query(self, connection, query, start_date_key, end_date_key):
+        """Execute a query with partition pruning in Fabric"""
+        cursor = connection.cursor()
+        cursor.execute(query, (start_date_key, end_date_key))
+        return cursor.fetchall()
