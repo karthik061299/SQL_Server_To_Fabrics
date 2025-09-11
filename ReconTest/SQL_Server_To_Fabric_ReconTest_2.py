@@ -245,3 +245,45 @@ class DataValidator:
             }
         
         return None
+    
+    def _compare_chunks(self, df_sql: pd.DataFrame, df_fabric: pd.DataFrame) -> List[Dict]:
+        """Compare large dataframes in chunks"""
+        differences = []
+        
+        # Calculate chunk-level statistics for comparison
+        sql_stats = self._calculate_chunk_statistics(df_sql)
+        fabric_stats = self._calculate_chunk_statistics(df_fabric)
+        
+        # Compare statistics
+        for col in sql_stats:
+            if col in fabric_stats:
+                stat_diff = self._compare_statistics(sql_stats[col], fabric_stats[col], col)
+                if stat_diff:
+                    differences.append(stat_diff)
+        
+        return differences
+    
+    def _calculate_chunk_statistics(self, df: pd.DataFrame) -> Dict:
+        """Calculate statistical summary of dataframe"""
+        stats = {}
+        
+        for col in df.columns:
+            if df[col].dtype in ['int64', 'float64', 'int32', 'float32']:
+                stats[col] = {
+                    'count': df[col].count(),
+                    'sum': df[col].sum(),
+                    'mean': df[col].mean(),
+                    'std': df[col].std(),
+                    'min': df[col].min(),
+                    'max': df[col].max(),
+                    'null_count': df[col].isnull().sum()
+                }
+            else:
+                stats[col] = {
+                    'count': df[col].count(),
+                    'unique_count': df[col].nunique(),
+                    'null_count': df[col].isnull().sum(),
+                    'most_frequent': df[col].mode().iloc[0] if not df[col].mode().empty else None
+                }
+        
+        return stats
