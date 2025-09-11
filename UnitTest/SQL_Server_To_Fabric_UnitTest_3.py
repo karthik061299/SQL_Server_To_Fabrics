@@ -177,3 +177,63 @@ def execute_function_under_test(mock_conn, start_date, end_date):
     """Execute the function under test"""
     query = f"SELECT * FROM uspSemanticClaimTransactionMeasuresData('{start_date}', '{end_date}')"
     return mock_conn.execute(query).returns_dataframe()
+
+# Test cases
+def test_basic_functionality(mock_fabric_connection, sample_claim_transaction_data, 
+                             sample_claim_transaction_descriptors, sample_claim_descriptors,
+                             sample_policy_descriptors, sample_policy_risk_state,
+                             sample_existing_measures):
+    """TC001: Happy path - Basic functionality with valid data"""
+    # Arrange
+    fixtures = {
+        "EDSWH.dbo.FactClaimTransactionLineWC": sample_claim_transaction_data,
+        "EDSWH.dbo.DimClaimTransactionWC": pd.DataFrame({"ClaimTransactionWCKey": range(201, 206)}),
+        "Semantic.ClaimTransactionDescriptors": sample_claim_transaction_descriptors,
+        "Semantic.ClaimDescriptors": sample_claim_descriptors,
+        "Semantic.PolicyDescriptors": sample_policy_descriptors,
+        "Semantic.PolicyRiskStateDescriptors": sample_policy_risk_state,
+        "Semantic.ClaimTransactionMeasures": sample_existing_measures,
+        "EDSWH.dbo.DimBrand": pd.DataFrame({"BrandKey": range(501, 506)})
+    }
+    setup_mock_tables(mock_fabric_connection, fixtures)
+    
+    # Act
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    result = execute_function_under_test(mock_fabric_connection, start_date, end_date)
+    
+    # Assert
+    assert not result.empty, "Result should not be empty"
+    assert len(result) >= 3, "Should return at least 3 records (2 unchanged, 1 new, 1 updated)"
+    
+    # Check specific records
+    new_record = result[result['FactClaimTransactionLineWCKey'] == 1003]
+    assert len(new_record) == 1, "Should have one new record with ID 1003"
+    assert new_record['AuditOperations'].iloc[0] == 'Inserted', "New record should be marked as Inserted"
+    
+    updated_record = result[result['FactClaimTransactionLineWCKey'] == 1004]
+    assert len(updated_record) == 1, "Should have one updated record with ID 1004"
+    assert updated_record['AuditOperations'].iloc[0] == 'Updated', "Updated record should be marked as Updated"
+
+def test_empty_source_data(mock_fabric_connection):
+    """TC002: Edge case - Empty source data"""
+    # Arrange
+    fixtures = {
+        "EDSWH.dbo.FactClaimTransactionLineWC": pd.DataFrame(),
+        "EDSWH.dbo.DimClaimTransactionWC": pd.DataFrame(),
+        "Semantic.ClaimTransactionDescriptors": pd.DataFrame(),
+        "Semantic.ClaimDescriptors": pd.DataFrame(),
+        "Semantic.PolicyDescriptors": pd.DataFrame(),
+        "Semantic.PolicyRiskStateDescriptors": pd.DataFrame(),
+        "Semantic.ClaimTransactionMeasures": pd.DataFrame(),
+        "EDSWH.dbo.DimBrand": pd.DataFrame()
+    }
+    setup_mock_tables(mock_fabric_connection, fixtures)
+    
+    # Act
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    result = execute_function_under_test(mock_fabric_connection, start_date, end_date)
+    
+    # Assert
+    assert result.empty, "Result should be empty with empty source data"
