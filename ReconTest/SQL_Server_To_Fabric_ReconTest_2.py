@@ -386,3 +386,15 @@ class EnhancedSQLServerToFabricRecon:
             raise ValueError(f"Connection string not found in Key Vault or environment variable {env_var}")
         
         return connection_string
+    
+    def _check_memory_usage(self):
+        """Check memory usage and trigger garbage collection if needed"""
+        memory_percent = psutil.virtual_memory().percent / 100
+        
+        if memory_percent > self.config.memory_threshold:
+            self.logger.warning(f"Memory usage high ({memory_percent:.1%}). Triggering garbage collection.")
+            gc.collect()
+            
+            # Check again after GC
+            new_memory_percent = psutil.virtual_memory().percent / 100
+            self.logger.info(f"Memory usage after GC: {new_memory_percent:.1%}")
