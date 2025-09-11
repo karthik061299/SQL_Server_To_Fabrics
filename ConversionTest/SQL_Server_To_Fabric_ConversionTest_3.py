@@ -303,3 +303,26 @@ class ConversionTestHarness:
                 error_message=str(e),
                 warnings=[]
             )
+    
+    def run_all_tests(self):
+        """Run all test cases"""
+        self.start_time = time.time()
+        logger.info("Starting test execution")
+        
+        try:
+            self.connect_databases()
+            
+            if self.config.parallel_execution:
+                with ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
+                    self.test_results = list(executor.map(self.run_test_case, self.test_cases))
+            else:
+                self.test_results = [self.run_test_case(tc) for tc in self.test_cases]
+                
+        except Exception as e:
+            logger.error(f"Test execution failed: {str(e)}")
+            raise
+        finally:
+            self.close_connections()
+            
+        self.end_time = time.time()
+        logger.info(f"Test execution completed in {self.end_time - self.start_time:.2f} seconds")
