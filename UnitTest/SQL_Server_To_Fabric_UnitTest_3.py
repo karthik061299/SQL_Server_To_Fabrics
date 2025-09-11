@@ -108,3 +108,72 @@ def sample_claim_transaction_descriptors():
                'ClaimTransactionTypeCode', 'TransactionTypeCode', 'RecoveryTypeCode', 'ClaimTransactionSubTypeCode',
                'SourceTransactionCreateDate', 'TransactionSubmitDate']
     return pd.DataFrame(data, columns=columns)
+
+@pytest.fixture
+def sample_claim_descriptors():
+    """Create sample claim descriptors test data"""
+    data = [
+        # ClaimWCKey, EmploymentLocationState, JurisdictionState
+        (7001, 'CA', 'CA'),
+        (7002, 'NY', 'NY'),
+        (7003, 'TX', 'TX'),
+        (7004, None, 'FL'),
+        (7005, 'WA', None),
+    ]
+    columns = ['ClaimWCKey', 'EmploymentLocationState', 'JurisdictionState']
+    return pd.DataFrame(data, columns=columns)
+
+@pytest.fixture
+def sample_policy_descriptors():
+    """Create sample policy descriptors test data"""
+    data = [
+        # PolicyWCKey, AgencyKey, BrandKey
+        (5001, 401, 501),
+        (5002, 402, 502),
+        (5003, 403, 503),
+        (5004, 404, 504),
+        (5005, 405, 505),
+    ]
+    columns = ['PolicyWCKey', 'AgencyKey', 'BrandKey']
+    return pd.DataFrame(data, columns=columns)
+
+@pytest.fixture
+def sample_policy_risk_state():
+    """Create sample policy risk state test data"""
+    data = [
+        # PolicyWCKey, PolicyRiskStateWCKey, RiskState, RiskStateEffectiveDate, RecordEffectiveDate, LoadUpdateDate, RetiredInd
+        (5001, 601, 'CA', '2022-01-01', '2022-01-01', '2022-01-01', 0),
+        (5002, 602, 'NY', '2022-01-01', '2022-01-01', '2022-01-01', 0),
+        (5003, 603, 'TX', '2022-01-01', '2022-01-01', '2022-01-01', 0),
+        (5004, 604, 'FL', '2022-01-01', '2022-01-01', '2022-01-01', 0),
+        (5005, 605, 'WA', '2022-01-01', '2022-01-01', '2022-01-01', 0),
+    ]
+    columns = ['PolicyWCKey', 'PolicyRiskStateWCKey', 'RiskState', 'RiskStateEffectiveDate', 
+               'RecordEffectiveDate', 'LoadUpdateDate', 'RetiredInd']
+    return pd.DataFrame(data, columns=columns)
+
+@pytest.fixture
+def sample_existing_measures():
+    """Create sample existing ClaimTransactionMeasures data"""
+    data = [
+        # FactClaimTransactionLineWCKey, RevisionNumber, HashValue, LoadCreateDate
+        (1001, 1, 'hash1', '2023-01-01'),
+        (1002, 1, 'hash2', '2023-01-01'),
+        # 1003 is missing to test insertion
+        (1004, 1, 'different_hash', '2023-01-01'),  # Different hash to test update
+        (1005, 1, 'hash5', '2023-01-01'),
+    ]
+    columns = ['FactClaimTransactionLineWCKey', 'RevisionNumber', 'HashValue', 'LoadCreateDate']
+    return pd.DataFrame(data, columns=columns)
+
+# Helper functions for tests
+def setup_mock_tables(mock_conn, fixtures):
+    """Set up mock tables in the Fabric environment"""
+    for table_name, df in fixtures.items():
+        mock_conn.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM VALUES(...)").returns(None)
+        mock_conn.execute(f"SELECT * FROM {table_name}").returns(df)
+
+def execute_function_under_test(mock_conn, start_date, end_date):
+    """Execute the function under test"""
+    query = f"SELECT * FROM uspSemanticClaimTransactionMeasuresData('{start_date}', '{end_date}')"
+    return mock_conn.execute(query).returns_dataframe()
