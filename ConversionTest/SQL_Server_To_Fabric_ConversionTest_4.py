@@ -1,53 +1,42 @@
-_____________________________________________
-## *Author*: AAVA
-## *Created on*:   
-## *Description*:   Comprehensive test cases for validating SQL Server to Fabric conversion of uspSemanticClaimTransactionMeasuresData
-## *Version*: 4 
-## *Updated on*: 
-_____________________________________________
-
-import pytest
-import pyodbc
-import pandas as pd
-import uuid
-from datetime import datetime, timedelta
-from unittest.mock import patch, MagicMock
-import time
-import json
-import re
-
-
-class TestSemanticClaimTransactionMeasuresDataConversion:
-    """
-    Test suite for validating the conversion of Semantic.uspSemanticClaimTransactionMeasuresData 
-    from SQL Server to Microsoft Fabric SQL.
-    
-    This test suite focuses on:
-    1. Syntax validation
-    2. Functional equivalence
-    3. Performance comparison
-    4. Edge case handling
-    5. Manual intervention points
-    """
+    @pytest.fixture(scope="class")
+    def mock_sql_server_conn(self, sql_server_config):
+        """Create a mock connection to SQL Server for unit testing"""
+        mock_conn = MagicMock()
+        return mock_conn
     
     @pytest.fixture(scope="class")
-    def sql_server_config(self):
-        """Configuration for SQL Server connection"""
-        return {
-            "driver": "ODBC Driver 17 for SQL Server",
-            "server": "test-sql-server",
-            "database": "EDSMart",
-            "username": "test_user",
-            "password": "test_password"
-        }
+    def mock_fabric_conn(self, fabric_config):
+        """Create a mock connection to Fabric SQL for unit testing"""
+        mock_conn = MagicMock()
+        return mock_conn
     
-    @pytest.fixture(scope="class")
-    def fabric_config(self):
-        """Configuration for Fabric SQL connection"""
+    @pytest.fixture(scope="function")
+    def setup_test_data(self):
+        """Set up test data for the stored procedure"""
+        # Sample test data for different scenarios
         return {
-            "driver": "ODBC Driver 18 for SQL Server",  # or appropriate driver
-            "server": "test-fabric-server",
-            "database": "EDSMart",
-            "username": "test_user",
-            "password": "test_password"
+            "claim_transaction_measures": pd.DataFrame({
+                "FactClaimTransactionLineWCKey": range(1, 11),
+                "RevisionNumber": [1] * 10,
+                "HashValue": [f"hash{i}" for i in range(1, 11)],
+                "LoadCreateDate": [datetime.now() - timedelta(days=i) for i in range(10)]
+            }),
+            "policy_risk_state": pd.DataFrame({
+                "PolicyRiskStateWCKey": range(101, 111),
+                "PolicyWCKey": range(201, 211),
+                "RiskState": ["CA", "NY", "TX", "FL", "WA", "OR", "AZ", "NV", "ID", "MT"],
+                "RetiredInd": [0] * 10,
+                "RiskStateEffectiveDate": [datetime.now() - timedelta(days=100) for _ in range(10)],
+                "RecordEffectiveDate": [datetime.now() - timedelta(days=90) for _ in range(10)],
+                "LoadUpdateDate": [datetime.now() - timedelta(days=80) for _ in range(10)]
+            }),
+            "expected_results": pd.DataFrame({
+                "FactClaimTransactionLineWCKey": range(1, 11),
+                "RevisionNumber": [1] * 10,
+                "PolicyWCKey": range(201, 211),
+                "HashValue": [f"newhash{i}" for i in range(1, 11)],
+                "InsertUpdates": [0, 0, 1, 0, 1, 0, 1, 0, 1, 0],  # Mix of inserts and updates
+                "AuditOperations": ["Updated", "Updated", "Inserted", "Updated", "Inserted", 
+                                  "Updated", "Inserted", "Updated", "Inserted", "Updated"]
+            })
         }
