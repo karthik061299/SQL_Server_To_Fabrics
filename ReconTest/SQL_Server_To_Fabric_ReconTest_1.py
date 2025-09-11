@@ -61,3 +61,29 @@ class SQLServerToFabricReconTest:
             ]
         )
         self.logger = logging.getLogger(__name__)
+        
+    def create_sql_server_connection(self) -> bool:
+        """
+        Create connection to SQL Server
+        
+        Returns:
+            bool: True if connection successful, False otherwise
+        """
+        try:
+            connection_string = (
+                f"DRIVER={{{self.config['sql_server']['driver']}}};"
+                f"SERVER={self.config['sql_server']['server']};"
+                f"DATABASE={self.config['sql_server']['database']};"
+                f"UID={self.config['sql_server']['username']};"
+                f"PWD={self.config['sql_server']['password']};"
+                f"Trusted_Connection={self.config['sql_server'].get('trusted_connection', 'no')};"
+            )
+            
+            self.sql_server_conn = pyodbc.connect(connection_string)
+            self.logger.info("SQL Server connection established successfully")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to connect to SQL Server: {str(e)}")
+            self.results['errors'].append(f"SQL Server connection error: {str(e)}")
+            return False
