@@ -268,3 +268,38 @@ def test_special_date_handling(mock_fabric_connection, sample_claim_transaction_
         mock_execute.assert_called()
         call_args = mock_execute.call_args_list[0][0][0]
         assert '1700-01-01' in call_args, "Special date 1900-01-01 should be converted to 1700-01-01"
+
+def test_hash_calculation(mock_fabric_connection, sample_claim_transaction_data, 
+                         sample_claim_transaction_descriptors, sample_claim_descriptors,
+                         sample_policy_descriptors, sample_policy_risk_state):
+    """TC004: Data integrity - Hash calculation verification"""
+    # Arrange
+    fixtures = {
+        "EDSWH.dbo.FactClaimTransactionLineWC": sample_claim_transaction_data,
+        "EDSWH.dbo.DimClaimTransactionWC": pd.DataFrame({"ClaimTransactionWCKey": range(201, 206)}),
+        "Semantic.ClaimTransactionDescriptors": sample_claim_transaction_descriptors,
+        "Semantic.ClaimDescriptors": sample_claim_descriptors,
+        "Semantic.PolicyDescriptors": sample_policy_descriptors,
+        "Semantic.PolicyRiskStateDescriptors": sample_policy_risk_state,
+        "Semantic.ClaimTransactionMeasures": pd.DataFrame(),  # Empty existing measures
+        "EDSWH.dbo.DimBrand": pd.DataFrame({"BrandKey": range(501, 506)})
+    }
+    setup_mock_tables(mock_fabric_connection, fixtures)
+    
+    # Act
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    result = execute_function_under_test(mock_fabric_connection, start_date, end_date)
+    
+    # Assert
+    assert 'HashValue' in result.columns, "Result should include HashValue column"
+    assert not result['HashValue'].isnull().any(), "HashValue should not contain NULL values"
+    assert len(result['HashValue'].unique()) == len(result), "Each record should have a unique hash value"
+    
+    # Run again with the same data
+    fixtures["Semantic.ClaimTransactionMeasures"] = result[['FactClaimTransactionLineWCKey', 'RevisionNumber', 'HashValue', 'LoadCreateDate']]
+    setup_mock_tables(mock_fabric_connection, fixtures)
+    result2 = execute_function_under_test(mock_fabric_connection, start_date, end_date)
+    
+    # Should be empty as no changes
+    assert result2.empty, "Second run should return empty result as no changes were made"
