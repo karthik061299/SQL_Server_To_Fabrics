@@ -158,3 +158,41 @@ class DataValidator:
                 'description': 'Column structure mismatch between SQL Server and Fabric'
             })
             return differences
+        
+        # Align dataframes for comparison
+        common_columns = list(sql_columns.intersection(fabric_columns))
+        df_sql_aligned = df_sql[common_columns].sort_values(by=common_columns).reset_index(drop=True)
+        df_fabric_aligned = df_fabric[common_columns].sort_values(by=common_columns).reset_index(drop=True)
+        
+        # Compare data row by row (for smaller datasets)
+        if len(df_sql_aligned) <= self.config.chunk_size:
+            row_differences = self._compare_rows(df_sql_aligned, df_fabric_aligned)
+            differences.extend(row_differences)
+        else:
+            # For large datasets, use chunked comparison
+            chunk_differences = self._compare_chunks(df_sql_aligned, df_fabric_aligned)
+            differences.extend(chunk_differences)
+        
+        return differences
+    
+    def _compare_rows(self, df_sql: pd.DataFrame, df_fabric: pd.DataFrame) -> List[Dict]:
+        """Compare dataframes row by row"""
+        differences = []
+        max_rows = min(len(df_sql), len(df_fabric))
+        
+        for idx in range(max_rows):
+            if len(differences) >= self.config.max_row_differences:
+                differences.append({
+                    'type': 'max_differences_reached',
+                    'description': f'Maximum number of differences ({self.config.max_row_differences}) reached. Stopping comparison.'
+                })
+                break
+            
+            sql_row = df_sql.iloc[idx]
+            fabric_row = df_fabric.iloc[idx]
+            
+            row_diff = self._compare_single_row(sql_row, fabric_row, idx)
+            if row_diff:
+                differences.append(row_diff)
+        
+        return differences
