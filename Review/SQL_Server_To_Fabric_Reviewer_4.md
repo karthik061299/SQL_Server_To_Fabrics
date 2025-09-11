@@ -168,3 +168,105 @@ result_df = filtered_df.groupBy("claim_type").count()
 # Select only needed columns
 df = spark.table("claim_transactions").select("claim_id", "amount", "transaction_date")
 ```
+
+## 5. Security and Compliance Updates
+
+### 5.1 Fabric Security Model Requirements
+
+#### 5.1.1 Row-Level Security (RLS)
+```sql
+-- Implement row-level security
+CREATE FUNCTION security.claim_security_predicate(@user_region STRING)
+RETURNS TABLE
+AS
+RETURN SELECT 1 AS result
+WHERE @user_region = USER_REGION() OR IS_MEMBER('DataAdmin') = 1
+```
+
+#### 5.1.2 Column-Level Security
+```sql
+-- Mask sensitive data
+CREATE VIEW secure_claim_view AS
+SELECT 
+    claim_id,
+    CASE 
+        WHEN IS_MEMBER('FinanceTeam') = 1 THEN claim_amount
+        ELSE NULL 
+    END AS claim_amount,
+    transaction_date
+FROM claim_transactions
+```
+
+#### 5.1.3 Data Classification
+- **PII Data**: Implement proper masking and encryption
+- **Financial Data**: Apply appropriate access controls
+- **Audit Trails**: Maintain comprehensive logging
+- **Data Lineage**: Track data transformations for compliance
+
+### 5.2 Compliance Guidelines
+
+#### 5.2.1 GDPR Compliance
+```sql
+-- Data retention policy
+DELETE FROM claim_transactions 
+WHERE transaction_date < DATEADD(year, -7, CURRENT_DATE())
+AND data_retention_flag = 'ELIGIBLE_FOR_DELETION'
+```
+
+#### 5.2.2 SOX Compliance
+- Implement change tracking for financial data
+- Maintain audit logs for all data modifications
+- Establish approval workflows for schema changes
+- Document control procedures for financial reporting
+
+#### 5.2.3 HIPAA Compliance (for healthcare data)
+- Implement data encryption at rest and in transit
+- Establish access controls based on minimum necessary principle
+- Maintain comprehensive audit logs for PHI access
+- Implement data masking for non-production environments
+
+## 6. Enhanced Code Conversion Checklist
+
+### 6.1 Stored Procedure Conversion Validation
+
+#### 6.1.1 Pre-Conversion Checklist
+- [ ] **Dependency Analysis**: Map all dependent objects (tables, views, functions)
+- [ ] **Dynamic SQL Review**: Identify and catalog all dynamic SQL statements
+- [ ] **Temporary Object Usage**: Document temp tables and table variables
+- [ ] **Cursor Operations**: Identify cursors for set-based conversion
+- [ ] **Transaction Scope**: Map transaction boundaries and isolation levels
+- [ ] **Error Handling**: Document existing TRY-CATCH blocks
+- [ ] **Parameter Analysis**: Validate input/output parameters
+- [ ] **Performance Baseline**: Establish current performance metrics
+
+#### 6.1.2 Conversion Process Checklist
+- [ ] **Syntax Conversion**: Convert T-SQL to Spark SQL/Python
+- [ ] **Data Type Mapping**: Apply appropriate type conversions
+- [ ] **Function Replacement**: Replace SQL Server functions with Fabric equivalents
+- [ ] **Control Flow Logic**: Convert procedural logic to functional approach
+- [ ] **Temporary Storage**: Replace temp tables with DataFrames or temp views
+- [ ] **Dynamic SQL Handling**: Implement parameterized queries or dynamic DataFrame operations
+- [ ] **Error Handling**: Implement Fabric-appropriate error handling
+- [ ] **Logging Integration**: Add comprehensive logging and monitoring
+
+#### 6.1.3 Post-Conversion Validation
+- [ ] **Functional Testing**: Verify all business logic scenarios
+- [ ] **Performance Testing**: Compare performance against baseline
+- [ ] **Data Validation**: Ensure data integrity and completeness
+- [ ] **Security Testing**: Validate access controls and data protection
+- [ ] **Integration Testing**: Test with dependent systems
+- [ ] **User Acceptance Testing**: Validate business user requirements
+- [ ] **Documentation Update**: Complete technical and user documentation
+- [ ] **Rollback Plan**: Prepare rollback procedures
+
+### 6.2 Function Migration Verification Points
+
+| SQL Server Function | Fabric Equivalent | Verification Points |
+|---------------------|-------------------|---------------------|
+| `GETDATE()` | `CURRENT_TIMESTAMP()` | Time zone handling, precision |
+| `ISNULL()` | `COALESCE()` | NULL handling consistency |
+| `CONVERT()` | `CAST()` | Data type compatibility, truncation handling |
+| `HASHBYTES()` | `SHA2()` or `HASH()` | Hash algorithm, output format |
+| `@@SPID` | `SESSION_ID()` | Session context preservation |
+| `DATEADD()` | `DATEADD()` | Date arithmetic consistency |
+| `STRING_AGG()` | `CONCAT_WS()` | String concatenation behavior |
