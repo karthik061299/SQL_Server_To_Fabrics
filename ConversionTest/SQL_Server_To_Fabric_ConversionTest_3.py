@@ -284,3 +284,22 @@ class ConversionTestHarness:
                 data_matches=data_matches,
                 warnings=warnings
             )
+            
+        except Exception as e:
+            logger.error(f"Test case {test_case.id} failed with error: {str(e)}")
+            return TestResult(
+                test_case=test_case,
+                passed=False,
+                execution_time_sql_server=0,
+                execution_time_fabric=0,
+                performance_diff_percent=0,
+                row_count_sql_server=0,
+                row_count_fabric=0,
+                column_count_sql_server=0,
+                column_count_fabric=0,
+                data_hash_sql_server="",
+                data_hash_fabric="",
+                data_matches=False,
+                error_message=str(e),
+                warnings=[]
+            )
