@@ -1,158 +1,76 @@
 _____________________________________________
 ## *Author*: AAVA
 ## *Created on*:   
-## *Description*:   Comprehensive unit tests for SQL Server to Fabric conversion of uspSemanticClaimTransactionMeasuresData stored procedure
+## *Description*:   Unit tests for uspSemanticClaimTransactionMeasuresData Fabric SQL conversion
 ## *Version*: 2 
 ## *Updated on*: 
 _____________________________________________
 
 import pytest
 import pandas as pd
-import numpy as np
 from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime, timedelta, date
-import hashlib
+import datetime
 from decimal import Decimal
-import logging
-from typing import List, Dict, Any
+import hashlib
 
-# Configure logging for test execution
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Fabric SQL specific imports
+try:
+    from fabric_sql_connector import FabricSQLConnector
+except ImportError:
+    # Mock for testing without actual Fabric SQL connector
+    FabricSQLConnector = type('FabricSQLConnector', (), {})
 
 
 class TestUspSemanticClaimTransactionMeasuresData:
     """
-    Enhanced test class for uspSemanticClaimTransactionMeasuresData stored procedure conversion
-    from SQL Server to Fabric SQL.
+    Comprehensive unit tests for uspSemanticClaimTransactionMeasuresData Fabric SQL conversion.
     
-    Tests cover:
-    - Data transformations and joins
-    - Measure calculations (NetPaidIndemnity, GrossIncurredLoss, etc.)
-    - Hash value generation and change detection
-    - Recovery type handling
-    - Edge cases and error scenarios
-    - Performance validation
-    - Data quality checks
+    This test suite covers:
+    - Happy path scenarios
+    - Edge cases
+    - Error handling
+    - Data validation
+    - Performance considerations
+    - Fabric SQL specific features
     """
     
-    @pytest.fixture(scope="class")
-    def setup_test_environment(self):
-        """
-        Setup test environment with mock data and configurations
-        """
-        logger.info("Setting up test environment")
-        
-        # Mock database connection
-        mock_connection = Mock()
-        
-        # Mock FactClaimTransactionLineWC data
-        fact_claim_data = pd.DataFrame({
-            'FactClaimTransactionLineWCKey': [1, 2, 3, 4, 5],
-            'RevisionNumber': [1, 1, 1, 1, 1],
-            'PolicyWCKey': [201, 202, 203, 204, 205],
-            'ClaimWCKey': [101, 102, 103, 104, 105],
-            'ClaimTransactionLineCategoryKey': [301, 302, 303, 304, 305],
-            'ClaimTransactionWCKey': [401, 402, 403, 404, 405],
-            'ClaimCheckKey': [501, 502, 503, 504, 505],
-            'SourceTransactionLineItemCreateDate': [date(2024, 1, 15), date(2024, 2, 20), date(2024, 3, 10), 
-                                                  date(2024, 4, 5), date(2024, 5, 12)],
-            'SourceTransactionLineItemCreateDateKey': [20240115, 20240220, 20240310, 20240405, 20240512],
-            'TransactionAmount': [Decimal('1000.00'), Decimal('2500.00'), Decimal('0.00'), 
-                                Decimal('1500.00'), Decimal('3000.00')],
-            'RetiredInd': [0, 0, 0, 0, 0],
-            'SourceSystem': ['System1', 'System1', 'System2', 'System1', 'System2'],
-            'RecordEffectiveDate': [date(2024, 1, 15), date(2024, 2, 20), date(2024, 3, 10), 
-                                  date(2024, 4, 5), date(2024, 5, 12)],
-            'LoadUpdateDate': [datetime(2024, 1, 15), datetime(2024, 2, 20), datetime(2024, 3, 10), 
-                              datetime(2024, 4, 5), datetime(2024, 5, 12)]
-        })
-        
-        # Mock ClaimTransactionDescriptors data
-        claim_transaction_descriptors = pd.DataFrame({
-            'ClaimTransactionLineCategoryKey': [301, 302, 303, 304, 305],
-            'ClaimTransactionWCKey': [401, 402, 403, 404, 405],
-            'ClaimWCKey': [101, 102, 103, 104, 105],
-            'SourceTransactionCreateDate': [date(2024, 1, 15), date(2024, 2, 20), date(2024, 3, 10), 
-                                          date(2024, 4, 5), date(2024, 5, 12)],
-            'TransactionSubmitDate': [date(2024, 1, 16), date(2024, 2, 21), date(2024, 3, 11), 
-                                     date(2024, 4, 6), date(2024, 5, 13)],
-            'TransactionTypeCode': ['PAY', 'RES', 'REC', 'PAY', 'RES'],
-            'CoverageCode': ['IND', 'MED', 'IND', 'MED', 'IND'],
-            'RecoveryTypeCode': ['SUB', None, 'DEDUCT', 'SUB', None]
-        })
-        
-        # Mock ClaimDescriptors data
-        claim_descriptors = pd.DataFrame({
-            'ClaimWCKey': [101, 102, 103, 104, 105],
-            'ClaimNumber': ['CLM001', 'CLM002', 'CLM003', 'CLM004', 'CLM005'],
-            'ClaimStatusCode': ['OPEN', 'CLOSED', 'OPEN', 'OPEN', 'CLOSED'],
-            'DateOfLoss': [date(2023, 12, 1), date(2023, 11, 15), date(2024, 1, 20), 
-                          date(2024, 2, 10), date(2024, 3, 5)],
-            'EmploymentLocationState': ['CA', 'NY', None, 'FL', None],
-            'JurisdictionState': [None, None, 'TX', None, 'IL']
-        })
-        
-        # Mock PolicyDescriptors data
-        policy_descriptors = pd.DataFrame({
-            'PolicyWCKey': [201, 202, 203, 204, 205],
-            'PolicyNumber': ['POL001', 'POL002', 'POL003', 'POL004', 'POL005'],
-            'EffectiveDate': [date(2023, 1, 1), date(2023, 6, 1), date(2023, 12, 1), 
-                             date(2024, 1, 1), date(2024, 3, 1)],
-            'ExpirationDate': [date(2023, 12, 31), date(2024, 5, 31), date(2024, 11, 30), 
-                              date(2024, 12, 31), date(2025, 2, 28)],
-            'AgencyKey': [601, 602, 603, 604, 605],
-            'BrandKey': [701, 702, 703, 704, 705]
-        })
-        
-        # Mock PolicyRiskStateDescriptors data
-        policy_risk_state_descriptors = pd.DataFrame({
-            'PolicyRiskStateWCKey': [801, 802, 803, 804, 805],
-            'PolicyWCKey': [201, 202, 203, 204, 205],
-            'RiskState': ['CA', 'NY', 'TX', 'FL', 'IL'],
-            'RiskStateEffectiveDate': [date(2023, 1, 1), date(2023, 6, 1), date(2023, 12, 1), 
-                                     date(2024, 1, 1), date(2024, 3, 1)],
-            'RecordEffectiveDate': [date(2023, 1, 1), date(2023, 6, 1), date(2023, 12, 1), 
-                                  date(2024, 1, 1), date(2024, 3, 1)],
-            'RetiredInd': [0, 0, 0, 0, 0],
-            'LoadUpdateDate': [datetime(2023, 1, 1), datetime(2023, 6, 1), datetime(2023, 12, 1), 
-                              datetime(2024, 1, 1), datetime(2024, 3, 1)]
-        })
-        
-        # Mock DimBrand data
-        dim_brand = pd.DataFrame({
-            'BrandKey': [701, 702, 703, 704, 705],
-            'BrandName': ['Brand1', 'Brand2', 'Brand3', 'Brand4', 'Brand5'],
-            'BrandCode': ['B1', 'B2', 'B3', 'B4', 'B5']
-        })
-        
-        # Mock SemanticLayerMetaData for calculations
-        semantic_layer_metadata = pd.DataFrame({
-            'Measure_Name': ['NetPaidIndemnity', 'GrossIncurredLoss', 'NetIncurredLoss', 'RecoverySubrogation'],
-            'Logic': [
-                'CASE WHEN CoverageCode = \'IND\' AND TransactionTypeCode = \'PAY\' THEN TransactionAmount - RecoveryAmount ELSE 0 END',
-                'TransactionAmount + ReserveAmount',
-                'TransactionAmount + ReserveAmount - RecoveryAmount',
-                'CASE WHEN RecoveryTypeCode = \'SUB\' THEN RecoveryAmount ELSE 0 END'
-            ],
-            'SourceType': ['Claims', 'Claims', 'Claims', 'Claims'],
-            'IsActive': [1, 1, 1, 1]
-        })
-        
+    @pytest.fixture
+    def mock_fabric_connection(self):
+        """Mock Fabric SQL connection"""
+        mock_conn = Mock(spec=FabricSQLConnector)
+        mock_cursor = Mock()
+        mock_conn.cursor.return_value = mock_cursor
+        return mock_conn, mock_cursor
+    
+    @pytest.fixture
+    def fabric_connection_config(self):
+        """Fabric SQL connection configuration"""
         return {
-            'connection': mock_connection,
-            'test_data': {
-                'fact_claim_data': fact_claim_data,
-                'claim_transaction_descriptors': claim_transaction_descriptors,
-                'claim_descriptors': claim_descriptors,
-                'policy_descriptors': policy_descriptors,
-                'policy_risk_state_descriptors': policy_risk_state_descriptors,
-                'dim_brand': dim_brand,
-                'semantic_layer_metadata': semantic_layer_metadata
-            },
-            'config': {
-                'batch_size': 1000,
-                'timeout': 300,
-                'retry_count': 3
-            }
+            'workspace_name': 'test_workspace',
+            'server_endpoint': 'test.fabric.microsoft.com',
+            'database_name': 'EDSMart',
+            'authentication': 'AAD',
+            'timeout': 300  # Increased timeout for Fabric SQL
+        }
+    
+    @pytest.fixture
+    def sample_input_data(self):
+        """Sample input data for testing"""
+        return {
+            'job_start_datetime': datetime.datetime(2023, 1, 1),
+            'job_end_datetime': datetime.datetime(2023, 12, 31),
+            'fact_claim_transaction_data': [
+                {
+                    'FactClaimTransactionLineWCKey': 1,
+                    'RevisionNumber': 1,
+                    'PolicyWCKey': 100,
+                    'ClaimWCKey': 200,
+                    'ClaimTransactionLineCategoryKey': 300,
+                    'ClaimTransactionWCKey': 400,
+                    'ClaimCheckKey': 500,
+                    'TransactionAmount': Decimal('1000.00'),
+                    'LoadUpdateDate': datetime.datetime(2023, 6, 1),
+                    'RetiredInd': 0
+                }
+            ]
         }
