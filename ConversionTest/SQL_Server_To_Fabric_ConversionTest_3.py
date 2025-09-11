@@ -200,3 +200,22 @@ class ConversionTestHarness:
             row_count_fabric = len(fabric_df)
             column_count_sql_server = len(sql_server_df.columns)
             column_count_fabric = len(fabric_df.columns)
+            
+            # Check if column counts match
+            if column_count_sql_server != column_count_fabric:
+                warnings.append(f"Column count mismatch: SQL Server={column_count_sql_server}, Fabric={column_count_fabric}")
+                
+                # Log the column differences
+                sql_server_cols = set(sql_server_df.columns)
+                fabric_cols = set(fabric_df.columns)
+                missing_in_fabric = sql_server_cols - fabric_cols
+                extra_in_fabric = fabric_cols - sql_server_cols
+                
+                if missing_in_fabric:
+                    warnings.append(f"Columns missing in Fabric: {', '.join(missing_in_fabric)}")
+                if extra_in_fabric:
+                    warnings.append(f"Extra columns in Fabric: {', '.join(extra_in_fabric)}")
+            
+            # Check if row counts match
+            if row_count_sql_server != row_count_fabric:
+                warnings.append(f"Row count mismatch: SQL Server={row_count_sql_server}, Fabric={row_count_fabric}")
