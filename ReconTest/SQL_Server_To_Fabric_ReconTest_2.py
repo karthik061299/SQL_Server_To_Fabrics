@@ -93,3 +93,55 @@ class EnhancedLogger:
     
     def debug(self, message: str):
         self.logger.debug(message)
+
+class AzureKeyVaultManager:
+    """Secure credential management using Azure Key Vault"""
+    
+    def __init__(self, vault_url: str):
+        self.vault_url = vault_url
+        self.credential = DefaultAzureCredential()
+        self.client = SecretClient(vault_url=vault_url, credential=self.credential)
+        
+    def get_secret(self, secret_name: str) -> str:
+        """Retrieve secret from Azure Key Vault"""
+        try:
+            secret = self.client.get_secret(secret_name)
+            return secret.value
+        except Exception as e:
+            raise Exception(f"Failed to retrieve secret '{secret_name}': {str(e)}")
+
+class PerformanceMonitor:
+    """Performance monitoring and metrics collection"""
+    
+    def __init__(self, logger):
+        self.logger = logger
+        self.metrics = {}
+        self.start_time = None
+        
+    def start_monitoring(self, operation: str):
+        """Start monitoring an operation"""
+        self.start_time = time.time()
+        self.metrics[operation] = {
+            'start_time': self.start_time,
+            'start_memory': psutil.virtual_memory().percent,
+            'start_cpu': psutil.cpu_percent()
+        }
+        
+    def end_monitoring(self, operation: str):
+        """End monitoring and record metrics"""
+        if operation in self.metrics:
+            end_time = time.time()
+            self.metrics[operation].update({
+                'end_time': end_time,
+                'duration': end_time - self.metrics[operation]['start_time'],
+                'end_memory': psutil.virtual_memory().percent,
+                'end_cpu': psutil.cpu_percent(),
+                'memory_delta': psutil.virtual_memory().percent - self.metrics[operation]['start_memory']
+            })
+            
+            self.logger.info(f"Operation '{operation}' completed in {self.metrics[operation]['duration']:.2f}s")
+            self.logger.info(f"Memory usage: {self.metrics[operation]['memory_delta']:+.2f}%")
+    
+    def get_metrics(self) -> Dict:
+        """Get all collected metrics"""
+        return self.metrics
