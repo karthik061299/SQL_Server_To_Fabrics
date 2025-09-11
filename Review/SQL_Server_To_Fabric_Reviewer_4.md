@@ -92,3 +92,79 @@ TBLPROPERTIES (
 - **Date/Time**: Use DATE type instead of TIMESTAMP when time component is not needed
 - **Binary Data**: Consider external storage for large binary objects with references
 - **Complex Types**: Use structured types (ARRAY, MAP, STRUCT) for nested data
+
+## 4. Updated Performance Optimization Guidelines
+
+### 4.1 Fabric Performance Tuning Recommendations
+
+#### 4.1.1 Partition Strategy
+```sql
+-- Recommended partitioning for large datasets
+CREATE TABLE claim_transactions (
+    transaction_id STRING,
+    claim_date DATE,
+    amount DECIMAL(18,2)
+)
+USING DELTA
+PARTITIONED BY (year(claim_date), month(claim_date))
+```
+
+#### 4.1.2 Z-Ordering for Query Performance
+```sql
+-- Optimize for common query patterns
+OPTIMIZE claim_transactions
+ZORDER BY (claim_id, transaction_date)
+```
+
+#### 4.1.3 Caching Strategies
+```sql
+-- Cache frequently accessed tables
+CACHE TABLE semantic_measures_summary
+```
+
+#### 4.1.4 Compute Optimization
+- **Spark Pool Configuration**: Use appropriate Spark pool sizes based on data volume
+- **Auto-scaling**: Enable auto-scaling for variable workloads
+- **Memory Management**: Configure executor memory based on data processing requirements
+- **Shuffle Partitions**: Optimize based on data volume and cluster size
+- **Broadcast Joins**: Use for joining small dimension tables
+
+### 4.2 Performance Monitoring
+```sql
+-- Monitor query performance
+SELECT 
+    query_id,
+    duration_ms,
+    rows_processed,
+    bytes_scanned
+FROM system.query_history
+WHERE query_text LIKE '%semantic_claim%'
+ORDER BY duration_ms DESC
+```
+
+### 4.3 Query Optimization Patterns
+
+#### 4.3.1 Join Optimization
+```python
+# Use broadcast joins for dimension tables
+from pyspark.sql.functions import broadcast
+
+claim_fact_df = spark.table("claim_facts")
+claim_dim_df = spark.table("claim_dimensions") # Small dimension table
+
+# Broadcast the smaller table
+result_df = claim_fact_df.join(broadcast(claim_dim_df), "claim_id")
+```
+
+#### 4.3.2 Predicate Pushdown
+```python
+# Leverage predicate pushdown
+filtered_df = spark.table("large_claim_table").filter("transaction_date > '2023-01-01'")
+result_df = filtered_df.groupBy("claim_type").count()
+```
+
+#### 4.3.3 Column Pruning
+```python
+# Select only needed columns
+df = spark.table("claim_transactions").select("claim_id", "amount", "transaction_date")
+```
