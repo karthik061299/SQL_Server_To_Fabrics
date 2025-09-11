@@ -54,3 +54,63 @@ class ValidationConfig:
     max_row_differences: int = 100  # Maximum number of row differences to report
     chunk_size: int = 10000  # Chunk size for large dataset processing
     timeout_seconds: int = 3600  # Query timeout in seconds
+
+@dataclass
+class ValidationResult:
+    """Class to store validation results"""
+    test_name: str
+    passed: bool
+    sql_server_count: int
+    fabric_count: int
+    differences_found: List[Dict]
+    execution_time_sql: float
+    execution_time_fabric: float
+    error_message: Optional[str] = None
+    data_hash_sql: Optional[str] = None
+    data_hash_fabric: Optional[str] = None
+
+class DatabaseConnector:
+    """Handles database connections and query execution"""
+    
+    def __init__(self, connection_string: str, db_type: str):
+        self.connection_string = connection_string
+        self.db_type = db_type
+        self.connection = None
+    
+    def connect(self) -> bool:
+        """Establish database connection"""
+        try:
+            if self.db_type.lower() == 'sqlserver':
+                self.connection = pyodbc.connect(self.connection_string, timeout=30)
+            elif self.db_type.lower() == 'fabric':
+                # Fabric connection using appropriate driver
+                self.connection = pyodbc.connect(self.connection_string, timeout=30)
+            
+            logger.info(f"Successfully connected to {self.db_type}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to {self.db_type}: {str(e)}")
+            return False
+    
+    def execute_query(self, query: str, params: List = None) -> Tuple[pd.DataFrame, float]:
+        """Execute query and return results with execution time"""
+        start_time = time.time()
+        try:
+            if params:
+                df = pd.read_sql(query, self.connection, params=params)
+            else:
+                df = pd.read_sql(query, self.connection)
+            
+            execution_time = time.time() - start_time
+            logger.info(f"Query executed successfully in {execution_time:.2f} seconds. Rows returned: {len(df)}")
+            return df, execution_time
+        except Exception as e:
+            execution_time = time.time() - start_time
+            logger.error(f"Query execution failed after {execution_time:.2f} seconds: {str(e)}")
+            raise
+    
+    def close(self):
+        """Close database connection"""
+        if self.connection:
+            self.connection.close()
+            logger.info(f"Connection to {self.db_type} closed")
