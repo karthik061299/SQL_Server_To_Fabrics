@@ -27,3 +27,69 @@ from azure.identity import DefaultAzureCredential
 from scipy import stats
 import warnings
 warnings.filterwarnings('ignore')
+
+@dataclass
+class ReconConfig:
+    """Configuration class for reconciliation test"""
+    chunk_size: int = 10000
+    max_workers: int = 4
+    retry_attempts: int = 3
+    retry_delay: float = 1.0
+    memory_threshold: float = 0.8
+    tolerance: float = 0.01
+    enable_parallel: bool = True
+    enable_statistics: bool = True
+    log_level: str = "INFO"
+    output_dir: str = "recon_reports"
+    key_vault_url: str = ""
+    
+class EnhancedLogger:
+    """Enhanced logging with multiple handlers and detailed formatting"""
+    
+    def __init__(self, name: str, log_level: str = "INFO", output_dir: str = "logs"):
+        self.logger = logging.getLogger(name)
+        self.logger.setLevel(getattr(logging, log_level.upper()))
+        
+        # Clear existing handlers
+        self.logger.handlers.clear()
+        
+        # Create output directory
+        Path(output_dir).mkdir(exist_ok=True)
+        
+        # Detailed formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        
+        # Console handler
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        self.logger.addHandler(console_handler)
+        
+        # File handler
+        file_handler = logging.FileHandler(
+            Path(output_dir) / f"{name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        )
+        file_handler.setFormatter(formatter)
+        self.logger.addHandler(file_handler)
+        
+        # Error file handler
+        error_handler = logging.FileHandler(
+            Path(output_dir) / f"{name}_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        )
+        error_handler.setLevel(logging.ERROR)
+        error_handler.setFormatter(formatter)
+        self.logger.addHandler(error_handler)
+    
+    def info(self, message: str):
+        self.logger.info(message)
+    
+    def error(self, message: str):
+        self.logger.error(message)
+    
+    def warning(self, message: str):
+        self.logger.warning(message)
+    
+    def debug(self, message: str):
+        self.logger.debug(message)
