@@ -339,3 +339,60 @@ class DataValidator:
         
         finally:
             self.sql_connector.close()
+    
+    def execute_fabric_equivalent(self, parameters: Dict = None) -> Tuple[pd.DataFrame, float]:
+        """Execute the equivalent query/procedure in Fabric"""
+        logger.info("Executing equivalent logic in Fabric")
+        
+        if not self.fabric_connector.connect():
+            raise Exception("Failed to connect to Fabric")
+        
+        try:
+            # This would be the Fabric equivalent of the stored procedure
+            # For uspSemanticClaimTransactionMeasuresData, we need to execute the Fabric SQL equivalent
+            # The actual query should be replaced with the proper Fabric SQL
+            fabric_query = """
+            -- Fabric equivalent of uspSemanticClaimTransactionMeasuresData
+            -- This is a placeholder - replace with actual Fabric implementation
+            DECLARE @TabName VARCHAR(100) = CONCAT('temp_CTM', CAST(SESSION_ID() AS VARCHAR(10)));
+            DECLARE @TabNameFact VARCHAR(100) = CONCAT('temp_CTMFact', CAST(SESSION_ID() AS VARCHAR(10)));
+            DECLARE @TabFinal VARCHAR(100) = CONCAT('temp_CTMF', CAST(SESSION_ID() AS VARCHAR(10)));
+            DECLARE @TabNamePrs VARCHAR(100) = CONCAT('temp_CTPrs', CAST(SESSION_ID() AS VARCHAR(10)));
+            DECLARE @ProdSource VARCHAR(100) = CONCAT('temp_PRDCLmTrans', CAST(SESSION_ID() AS VARCHAR(10)));
+            
+            -- Execute the main logic
+            -- This should be the actual implementation of the stored procedure in Fabric
+            
+            -- For testing purposes, we'll return a sample result set
+            SELECT 
+                FactClaimTransactionLineWCKey,
+                RevisionNumber,
+                PolicyWCKey,
+                PolicyRiskStateWCKey,
+                ClaimWCKey,
+                ClaimTransactionLineCategoryKey,
+                ClaimTransactionWCKey,
+                ClaimCheckKey,
+                AgencyKey,
+                SourceClaimTransactionCreateDate,
+                SourceClaimTransactionCreateDateKey,
+                TransactionCreateDate,
+                TransactionSubmitDate,
+                NetPaidIndemnity,
+                NetPaidMedical,
+                NetPaidExpense,
+                HashValue,
+                RetiredInd,
+                InsertUpdates,
+                AuditOperations,
+                LoadUpdateDate,
+                LoadCreateDate
+            FROM SemanticClaimTransactionMeasures
+            WHERE ProcessedDate >= DATEADD(day, -30, CURRENT_TIMESTAMP)
+            """
+            
+            df, execution_time = self.fabric_connector.execute_query(fabric_query)
+            return df, execution_time
+        
+        finally:
+            self.fabric_connector.close()
