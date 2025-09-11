@@ -270,3 +270,301 @@ AND data_retention_flag = 'ELIGIBLE_FOR_DELETION'
 | `@@SPID` | `SESSION_ID()` | Session context preservation |
 | `DATEADD()` | `DATEADD()` | Date arithmetic consistency |
 | `STRING_AGG()` | `CONCAT_WS()` | String concatenation behavior |
+
+## 7. New Fabric-Specific Features Integration
+
+### 7.1 Lakehouse Architecture Leverage
+
+#### 7.1.1 Delta Lake Features
+```python
+# Time travel capabilities
+df_historical = spark.read.format("delta")\n    .option("timestampAsOf", "2024-01-01")\n    .table("semantic_claim_measures")
+
+# Schema evolution
+df.write.format("delta")\n    .option("mergeSchema", "true")\n    .mode("append")\n    .saveAsTable("semantic_claim_measures")
+```
+
+#### 7.1.2 Streaming Integration
+```python
+# Real-time data processing
+streaming_df = spark.readStream\n    .format("delta")\n    .table("claim_transactions_stream")
+
+query = streaming_df.writeStream\n    .format("delta")\n    .outputMode("append")\n    .option("checkpointLocation", "/checkpoints/claim_processing")\n    .table("processed_claims")
+```
+
+#### 7.1.3 OneLake Integration
+```python
+# Cross-workspace data access
+df_external = spark.read.format("delta")\n    .load("abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse/Tables/external_data")
+```
+
+### 7.2 Advanced Analytics Integration
+
+#### 7.2.1 Machine Learning Pipeline
+```python
+from pyspark.ml import Pipeline
+from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.regression import LinearRegression
+
+# Integrate ML models for claim prediction
+assembler = VectorAssembler(inputCols=["claim_amount", "days_since_incident"], outputCol="features")
+lr = LinearRegression(featuresCol="features", labelCol="settlement_amount")
+pipeline = Pipeline(stages=[assembler, lr])
+```
+
+#### 7.2.2 Power BI Integration
+```python
+# Create semantic model for Power BI
+spark.sql("""
+CREATE OR REPLACE VIEW semantic.claim_analytics AS
+SELECT
+    c.claim_id,
+    c.claim_date,
+    c.claim_amount,
+    p.policy_number,
+    p.policy_type,
+    a.agent_name,
+    a.agency_code
+FROM claim_transactions c
+JOIN policies p ON c.policy_id = p.policy_id
+JOIN agents a ON p.agent_id = a.agent_id
+""")
+```
+
+## 8. Updated Testing and Validation Framework
+
+### 8.1 Automated Testing Recommendations
+
+#### 8.1.1 Unit Testing Framework
+```python
+import pytest
+from pyspark.sql import SparkSession
+from pyspark.sql.types import *
+
+class TestSemanticClaimProcessing:
+    @pytest.fixture
+    def spark(self):
+        return SparkSession.builder.appName("test").getOrCreate()
+    
+    def test_claim_calculation_logic(self, spark):
+        # Test data setup
+        test_data = [(1, "2024-01-01", 1000.00), (2, "2024-01-02", 2000.00)]
+        schema = StructType([
+            StructField("claim_id", IntegerType(), True),
+            StructField("claim_date", StringType(), True),
+            StructField("amount", DoubleType(), True)
+        ])
+        
+        df = spark.createDataFrame(test_data, schema)
+        result = process_semantic_claims(df)
+        
+        assert result.count() == 2
+        assert result.filter("processed_amount > 0").count() == 2
+```
+
+#### 8.1.2 Integration Testing
+```python
+def test_end_to_end_processing():
+    # Test complete data pipeline
+    input_data = load_test_data("claim_transactions_sample.json")
+    result = run_semantic_processing_pipeline(input_data)
+    
+    # Validate results
+    assert_data_quality(result)
+    assert_business_rules(result)
+    assert_performance_metrics(result)
+```
+
+#### 8.1.3 Data Quality Testing
+```sql
+-- Data quality validation queries
+SELECT 
+    'Null Check' as test_name,
+    COUNT(*) as failed_records
+FROM semantic_claim_measures 
+WHERE claim_id IS NULL OR measure_value IS NULL
+
+UNION ALL
+
+SELECT 
+    'Range Check' as test_name,
+    COUNT(*) as failed_records
+FROM semantic_claim_measures 
+WHERE measure_value < 0 OR measure_value > 1000000
+```
+
+### 8.2 Performance Benchmarking Guidelines
+
+#### 8.2.1 Baseline Metrics
+- **Execution Time**: Measure end-to-end processing time
+- **Resource Utilization**: Monitor CPU, memory, and I/O usage
+- **Throughput**: Records processed per second
+- **Latency**: Time to process individual records
+- **Scalability**: Performance with increasing data volumes
+
+#### 8.2.2 Benchmark Implementation
+```python
+import time
+from datetime import datetime
+
+def benchmark_processing(data_size="small"):
+    # Load appropriate test dataset
+    if data_size == "small":
+        df = load_test_dataset(1000)  # 1,000 records
+    elif data_size == "medium":
+        df = load_test_dataset(100000)  # 100,000 records
+    elif data_size == "large":
+        df = load_test_dataset(1000000)  # 1,000,000 records
+    
+    # Measure processing time
+    start_time = time.time()
+    result = process_semantic_claims(df)
+    end_time = time.time()
+    
+    # Calculate metrics
+    execution_time = end_time - start_time
+    record_count = result.count()
+    throughput = record_count / execution_time if execution_time > 0 else 0
+    
+    # Log results
+    log_benchmark_results({
+        "data_size": data_size,
+        "record_count": record_count,
+        "execution_time": execution_time,
+        "throughput": throughput,
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    return {
+        "execution_time": execution_time,
+        "throughput": throughput
+    }
+```
+
+## 9. Enhanced Error Handling and Troubleshooting
+
+### 9.1 Common Fabric Migration Issues and Solutions
+
+#### 9.1.1 Memory Errors
+```python
+# Solution: Implement proper memory management
+try:
+    df_large = spark.read.table("large_claim_table")
+    df_processed = df_large.repartition(200).cache()
+    result = process_claims(df_processed)
+except Exception as e:
+    if "OutOfMemoryError" in str(e):
+        # Implement chunked processing
+        result = process_claims_in_chunks(df_large, chunk_size=10000)
+    else:
+        raise e
+```
+
+#### 9.1.2 Schema Evolution Problems
+```python
+# Solution: Handle schema changes gracefully
+def safe_schema_merge(df, target_table):
+    try:
+        df.write.format("delta").option("mergeSchema", "true").mode("append").saveAsTable(target_table)
+    except AnalysisException as e:
+        if "schema mismatch" in str(e).lower():
+            # Handle schema conflicts
+            aligned_df = align_schema(df, target_table)
+            aligned_df.write.format("delta").mode("append").saveAsTable(target_table)
+        else:
+            raise e
+```
+
+#### 9.1.3 Performance Degradation
+```python
+# Solution: Implement performance monitoring
+def monitor_query_performance(func):
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        
+        execution_time = end_time - start_time
+        if execution_time > PERFORMANCE_THRESHOLD:
+            log_performance_issue(func.__name__, execution_time)
+            
+        return result
+    return wrapper
+```
+
+### 9.2 Troubleshooting Guide
+
+#### 9.2.1 Performance Issues
+1. **Symptom**: Slow query execution
+   - **Diagnosis**: Check partition pruning and file sizes
+   - **Solution**: Optimize partitioning strategy and run OPTIMIZE command
+
+2. **Symptom**: Memory errors
+   - **Diagnosis**: Large DataFrame operations
+   - **Solution**: Implement chunked processing or increase cluster size
+
+#### 9.2.2 Data Issues
+1. **Symptom**: Data inconsistencies
+   - **Diagnosis**: Schema evolution or type conversion issues
+   - **Solution**: Implement data validation and type checking
+
+2. **Symptom**: Missing data
+   - **Diagnosis**: Join conditions or filter logic
+   - **Solution**: Review join logic and add data lineage tracking
+
+### 9.3 Monitoring and Alerting Setup
+
+```python
+# Comprehensive monitoring implementation
+class FabricMonitor:
+    def __init__(self, workspace_name, alert_threshold=0.8):
+        self.workspace_name = workspace_name
+        self.alert_threshold = alert_threshold
+        self.metrics_history = []
+    
+    def collect_metrics(self):
+        # Collect key performance metrics
+        metrics = {
+            "timestamp": datetime.now().isoformat(),
+            "cpu_utilization": get_cpu_utilization(),
+            "memory_utilization": get_memory_utilization(),
+            "active_queries": get_active_query_count(),
+            "failed_queries": get_failed_query_count(),
+            "average_query_duration": get_avg_query_duration()
+        }
+        
+        self.metrics_history.append(metrics)
+        return metrics
+    
+    def check_alerts(self, metrics):
+        alerts = []
+        
+        # Check for high resource utilization
+        if metrics["cpu_utilization"] > self.alert_threshold:
+            alerts.append({"type": "HIGH_CPU", "value": metrics["cpu_utilization"]})
+            
+        if metrics["memory_utilization"] > self.alert_threshold:
+            alerts.append({"type": "HIGH_MEMORY", "value": metrics["memory_utilization"]})
+            
+        # Check for query failures
+        if metrics["failed_queries"] > 0:
+            alerts.append({"type": "QUERY_FAILURES", "value": metrics["failed_queries"]})
+            
+        # Check for slow queries
+        if metrics["average_query_duration"] > QUERY_DURATION_THRESHOLD:
+            alerts.append({"type": "SLOW_QUERIES", "value": metrics["average_query_duration"]})
+            
+        return alerts
+    
+    def send_alerts(self, alerts):
+        if not alerts:
+            return
+            
+        for alert in alerts:
+            send_notification({
+                "workspace": self.workspace_name,
+                "alert_type": alert["type"],
+                "alert_value": alert["value"],
+                "timestamp": datetime.now().isoformat()
+            })
+```
