@@ -153,3 +153,46 @@ class SQLServerToFabricReconTest:
             self.logger.error(f"Error executing SQL Server procedure: {str(e)}")
             self.results['errors'].append(f"SQL Server execution error: {str(e)}")
             return pd.DataFrame()
+    
+    def transform_data_for_fabric(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Transform SQL Server data for Fabric compatibility
+        
+        Args:
+            df (pd.DataFrame): Source dataframe from SQL Server
+            
+        Returns:
+            pd.DataFrame: Transformed dataframe
+        """
+        try:
+            transformed_df = df.copy()
+            
+            # Handle datetime columns
+            datetime_columns = ['SourceClaimTransactionCreateDate', 'TransactionCreateDate', 
+                              'TransactionSubmitDate', 'RecordEffectiveDate', 'LoadUpdateDate', 'LoadCreateDate']
+            
+            for col in datetime_columns:
+                if col in transformed_df.columns:
+                    transformed_df[col] = pd.to_datetime(transformed_df[col], errors='coerce')
+            
+            # Handle numeric columns
+            numeric_columns = [col for col in transformed_df.columns if 'Amount' in col or 
+                             col.startswith(('Net', 'Gross', 'Recovery', 'Reserves'))]
+            
+            for col in numeric_columns:
+                if col in transformed_df.columns:
+                    transformed_df[col] = pd.to_numeric(transformed_df[col], errors='coerce')
+            
+            # Handle NULL values
+            transformed_df = transformed_df.fillna({
+                col: 0 if transformed_df[col].dtype in ['int64', 'float64'] else ''
+                for col in transformed_df.columns
+            })
+            
+            self.logger.info("Data transformation completed successfully")
+            return transformed_df
+            
+        except Exception as e:
+            self.logger.error(f"Error in data transformation: {str(e)}")
+            self.results['errors'].append(f"Data transformation error: {str(e)}")
+            return df
