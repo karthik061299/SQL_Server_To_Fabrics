@@ -513,3 +513,103 @@ except Exception as e:
     log_execution_failure("uspSemanticClaimTransactionMeasuresData", str(e))
     raise
 ```
+
+### 4.2 Temporary Data Storage Strategy
+
+**Current Approach:**
+Dynamically named global temporary tables (`##CTM` + session ID).
+
+**Recommended Optimization:**
+
+```python
+# Comprehensive temporary data management strategy
+
+# 1. For small datasets: Spark temporary views
+def create_temp_view(name, query):
+    """Create a temporary view with the given name and query"""
+    spark.sql(f"DROP VIEW IF EXISTS {name}")
+    spark.sql(f"CREATE TEMPORARY VIEW {name} AS {query}")
+    return name
+
+# 2. For medium datasets: Cached DataFrames
+def create_cached_df(query):
+    """Create and cache a DataFrame from the given query"""
+    df = spark.sql(query)
+    df.cache()
+    return df
+
+# 3. For large datasets: Temporary Delta tables
+def create_temp_delta_table(name, query, partition_by=None):
+    """Create a temporary Delta table with optional partitioning"""
+    # Generate unique name with session ID
+    import uuid
+    session_id = str(uuid.uuid4()).replace('-', '')[:8]
+    full_name = f"temp.{name}_{session_id}"
+    
+    # Drop if exists
+    spark.sql(f"DROP TABLE IF EXISTS {full_name}")
+    
+    # Create table
+    if partition_by:
+        spark.sql(f"""
+        CREATE TABLE {full_name}
+        USING DELTA
+        PARTITIONED BY ({partition_by})
+        AS {query}
+        """)
+    else:
+        spark.sql(f"""
+        CREATE TABLE {full_name}
+        USING DELTA
+        AS {query}
+        """)
+    
+    return full_name
+```
+
+### 4.3 Hash-Based Change Detection
+
+**Current Approach:**
+Complex hash generation and comparison for change detection.
+
+**Recommended Optimization:**
+
+```python
+# Efficient hash-based change detection
+from pyspark.sql.functions import sha2, concat_ws, col, when, lit
+
+def detect_changes(new_data_df, existing_table, key_columns, hash_columns):
+    """Detect new and changed records using hash-based comparison"""
+    # Generate hash value for new data
+    col_refs = [col(c) for c in hash_columns]
+    new_data_with_hash = new_data_df.withColumn("HashValue", 
+                                             sha2(concat_ws("~", *col_refs), 512))
+    
+    # Read existing data with key columns and hash
+    if spark.catalog.tableExists(existing_table):
+        existing_data = spark.table(existing_table).select(
+            *key_columns, "HashValue"
+        )
+        
+        # Join with new data to identify changes
+        join_condition = " AND ".join([f"new.{k} = existing.{k}" for k in key_columns])
+        
+        # Mark records as new, changed, or unchanged
+        result = new_data_with_hash.alias("new").join(
+            existing_data.alias("existing"),
+            expr(join_condition),
+            "left_outer"
+        ).select(
+            "new.*",
+            when(col("existing.HashValue").isNull(), lit("INSERT"))
+            .when(col("new.HashValue") != col("existing.HashValue"), lit("UPDATE"))
+            .otherwise(lit("UNCHANGED")).alias("ChangeType")
+        )
+        
+        # Filter to only changed records if needed
+        changed_records = result.filter(col("ChangeType").isin("INSERT", "UPDATE"))
+        return changed_records
+    else:
+        # All records are new if table doesn't exist
+        return new_data_with_hash.withColumn("ChangeType", lit("INSERT"))
+```
