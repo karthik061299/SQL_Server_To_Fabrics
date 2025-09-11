@@ -124,3 +124,403 @@ class ReconciliationResult:
     column_results: List[ColumnComparisonResult] = field(default_factory=list)
     error_details: Optional[str] = None
     sample_mismatches: List[Dict] = field(default_factory=list)
+
+class SQLServerToFabricReconTest:
+    """Main class for SQL Server to Fabric reconciliation testing"""
+    
+    def __init__(self, config: ConnectionConfig):
+        """Initialize the reconciliation test framework
+        
+        Args:
+            config: Configuration object with connection details
+        """
+        self.config = config
+        self.credential = None
+        self.blob_service_client = None
+        self.container_client = None
+        self.sql_connection = None
+        self.fabric_connection = None
+        self.test_results = []
+        self.test_id = str(uuid.uuid4())[:8]
+        self.temp_resources = []
+        
+        # Initialize Azure services
+        self._initialize_azure_services()
+    
+    def _initialize_azure_services(self) -> None:
+        """Initialize Azure services and authentication"""
+        try:
+            logger.info("Initializing Azure services...")
+            
+            # Initialize Azure credential
+            if self.config.client_id and self.config.client_secret and self.config.tenant_id:
+                logger.info("Using service principal authentication")
+                self.credential = ClientSecretCredential(
+                    tenant_id=self.config.tenant_id,
+                    client_id=self.config.client_id,
+                    client_secret=self.config.client_secret
+                )
+            else:
+                logger.info("Using default Azure credential")
+                self.credential = DefaultAzureCredential()
+            
+            # Initialize Blob Service Client
+            storage_url = f"https://{self.config.azure_storage_account}.blob.core.windows.net"
+            self.blob_service_client = BlobServiceClient(
+                account_url=storage_url,
+                credential=self.credential
+            )
+            
+            # Get container client
+            self.container_client = self.blob_service_client.get_container_client(
+                self.config.azure_container
+            )
+            
+            # Verify container exists or create it
+            try:
+                self.container_client.get_container_properties()
+            except Exception:
+                logger.info(f"Container {self.config.azure_container} does not exist, creating it...")
+                self.container_client = self.blob_service_client.create_container(
+                    self.config.azure_container
+                )
+            
+            logger.info("Azure services initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize Azure services: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise
+    
+    def _get_secret_from_keyvault(self, secret_name: str) -> str:
+        """Retrieve secret from Azure Key Vault
+        
+        Args:
+            secret_name: Name of the secret to retrieve
+            
+        Returns:
+            Secret value as string
+        """
+        try:
+            if not self.config.key_vault_url:
+                raise ValueError("Key Vault URL not provided in configuration")
+                
+            secret_client = SecretClient(
+                vault_url=self.config.key_vault_url,
+                credential=self.credential
+            )
+            secret = secret_client.get_secret(secret_name)
+            return secret.value
+        except Exception as e:
+            logger.error(f"Failed to retrieve secret {secret_name}: {str(e)}")
+            raise
+    
+    def _connect_sql_server(self) -> pyodbc.Connection:
+        """Establish connection to SQL Server
+        
+        Returns:
+            Active SQL Server connection
+        """
+        try:
+            logger.info(f"Connecting to SQL Server: {self.config.sql_server}")
+            
+            # Build connection string based on authentication type
+            if self.config.sql_auth_type.lower() == "windows":
+                connection_string = (
+                    f"DRIVER={{ODBC Driver 17 for SQL Server}};" 
+                    f"SERVER={self.config.sql_server};" 
+                    f"DATABASE={self.config.sql_database};" 
+                    f"Trusted_Connection=yes;" 
+                    f"Connection Timeout=30;" 
+                    f"Command Timeout={self.config.timeout_seconds};"
+                )
+            else:
+                # SQL authentication
+                username = self.config.sql_username
+                password = self.config.sql_password
+                
+                # Try to get credentials from Key Vault if not provided
+                if (not username or not password) and self.config.key_vault_url:
+                    username = self._get_secret_from_keyvault("sql-username")
+                    password = self._get_secret_from_keyvault("sql-password")
+                
+                if not username or not password:
+                    raise ValueError("SQL authentication requires username and password")
+                    
+                connection_string = (
+                    f"DRIVER={{ODBC Driver 17 for SQL Server}};" 
+                    f"SERVER={self.config.sql_server};" 
+                    f"DATABASE={self.config.sql_database};" 
+                    f"UID={username};" 
+                    f"PWD={password};" 
+                    f"Connection Timeout=30;" 
+                    f"Command Timeout={self.config.timeout_seconds};"
+                )
+            
+            # Establish connection
+            connection = pyodbc.connect(connection_string)
+            connection.autocommit = True
+            logger.info("SQL Server connection established successfully")
+            return connection
+            
+        except Exception as e:
+            logger.error(f"Failed to connect to SQL Server: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise
+    
+    def _connect_fabric(self) -> pyodbc.Connection:
+        """Establish connection to Microsoft Fabric
+        
+        Returns:
+            Active Fabric connection
+        """
+        try:
+            logger.info(f"Connecting to Microsoft Fabric: {self.config.fabric_endpoint}")
+            
+            # Fabric connection using Azure AD authentication
+            connection_string = (
+                f"DRIVER={{ODBC Driver 17 for SQL Server}};" 
+                f"SERVER={self.config.fabric_endpoint};" 
+                f"DATABASE={self.config.fabric_database};" 
+                f"Authentication=ActiveDirectoryIntegrated;" 
+                f"Connection Timeout=30;" 
+                f"Command Timeout={self.config.timeout_seconds};"
+            )
+            
+            connection = pyodbc.connect(connection_string)
+            connection.autocommit = True
+            logger.info("Fabric connection established successfully")
+            return connection
+            
+        except Exception as e:
+            logger.error(f"Failed to connect to Fabric: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise
+    
+    def _execute_sql_server_procedure(self, parameters: Dict = None) -> Tuple[pd.DataFrame, float]:
+        """Execute the SQL Server stored procedure
+        
+        Args:
+            parameters: Dictionary of parameters to pass to the stored procedure
+            
+        Returns:
+            Tuple containing the result DataFrame and execution time in seconds
+        """
+        try:
+            if not self.sql_connection:
+                self.sql_connection = self._connect_sql_server()
+            
+            # Execute uspSemanticClaimTransactionMeasuresData stored procedure
+            cursor = self.sql_connection.cursor()
+            start_time = time.time()
+            
+            # Prepare and execute the stored procedure
+            if parameters:
+                param_string = ', '.join([f"@{k}=?" for k in parameters.keys()])
+                sql_query = f"EXEC [Semantic].[uspSemanticClaimTransactionMeasuresData] {param_string}"
+                logger.info(f"Executing SQL Server procedure with parameters: {parameters}")
+                cursor.execute(sql_query, list(parameters.values()))
+            else:
+                logger.info("Executing SQL Server procedure without parameters")
+                cursor.execute("EXEC [Semantic].[uspSemanticClaimTransactionMeasuresData] @pJobStartDateTime = '01/01/2023', @pJobEndDateTime = '12/31/2023'")
+            
+            # Fetch results
+            columns = [column[0] for column in cursor.description]
+            data = []
+            
+            # Fetch in batches to handle large result sets
+            batch = cursor.fetchmany(self.config.batch_size)
+            while batch:
+                data.extend(batch)
+                batch = cursor.fetchmany(self.config.batch_size)
+            
+            execution_time = time.time() - start_time
+            
+            # Convert to DataFrame
+            df = pd.DataFrame.from_records(data, columns=columns)
+            logger.info(f"SQL Server procedure executed successfully in {execution_time:.2f}s. Rows returned: {len(df)}")
+            
+            return df, execution_time
+            
+        except Exception as e:
+            logger.error(f"Failed to execute SQL Server procedure: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise
+    
+    def _upload_to_blob_storage(self, df: pd.DataFrame, blob_name: str) -> Tuple[str, float]:
+        """Upload DataFrame to Azure Blob Storage as Parquet
+        
+        Args:
+            df: DataFrame to upload
+            blob_name: Name for the blob in storage
+            
+        Returns:
+            Tuple containing the blob URL and upload time in seconds
+        """
+        try:
+            logger.info(f"Uploading data to blob storage as {blob_name}")
+            start_time = time.time()
+            
+            # Handle large DataFrames by using PyArrow directly
+            table = pa.Table.from_pandas(df)
+            
+            # Create a buffer to hold the Parquet data
+            buffer = pa.BufferOutputStream()
+            pq.write_table(table, buffer)
+            parquet_bytes = buffer.getvalue().to_pybytes()
+            
+            # Upload to blob storage
+            blob_client = self.container_client.get_blob_client(blob_name)
+            blob_client.upload_blob(parquet_bytes, overwrite=True)
+            
+            # Track for cleanup
+            self.temp_resources.append(("blob", blob_name))
+            
+            upload_time = time.time() - start_time
+            blob_url = f"https://{self.config.azure_storage_account}.blob.core.windows.net/{self.config.azure_container}/{blob_name}"
+            logger.info(f"Data uploaded to blob storage in {upload_time:.2f}s: {blob_url}")
+            
+            return blob_url, upload_time
+            
+        except Exception as e:
+            logger.error(f"Failed to upload to blob storage: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise
+    
+    def _create_fabric_external_table(self, blob_url: str, table_name: str, df_schema: pd.DataFrame) -> None:
+        """Create external table in Fabric pointing to blob storage
+        
+        Args:
+            blob_url: URL to the blob containing the data
+            table_name: Name for the external table
+            df_schema: DataFrame to use for schema definition
+        """
+        try:
+            logger.info(f"Creating external table {table_name} in Fabric")
+            
+            if not self.fabric_connection:
+                self.fabric_connection = self._connect_fabric()
+            
+            cursor = self.fabric_connection.cursor()
+            
+            # Track for cleanup
+            self.temp_resources.append(("table", table_name))
+            
+            # Drop table if exists
+            drop_sql = f"DROP TABLE IF EXISTS {table_name}"
+            cursor.execute(drop_sql)
+            
+            # Generate column definitions based on DataFrame schema
+            column_defs = []
+            for col, dtype in df_schema.dtypes.items():
+                # Map pandas dtypes to SQL types
+                if pd.api.types.is_integer_dtype(dtype):
+                    sql_type = "BIGINT"
+                elif pd.api.types.is_float_dtype(dtype):
+                    sql_type = "FLOAT"
+                elif pd.api.types.is_datetime64_any_dtype(dtype):
+                    sql_type = "DATETIME2"
+                elif pd.api.types.is_bool_dtype(dtype):
+                    sql_type = "BIT"
+                elif pd.api.types.is_object_dtype(dtype) or pd.api.types.is_string_dtype(dtype):
+                    sql_type = "STRING"
+                else:
+                    sql_type = "STRING"
+                column_defs.append(f"[{col}] {sql_type}")
+            
+            columns_sql = ",\n    ".join(column_defs)
+            
+            # Create external data source if it doesn't exist
+            try:
+                cursor.execute("SELECT 1 FROM sys.external_data_sources WHERE name = 'ExternalDataSource'")
+                if not cursor.fetchone():
+                    create_data_source_sql = f"""
+                    CREATE EXTERNAL DATA SOURCE ExternalDataSource 
+                    WITH (
+                        LOCATION = 'https://{self.config.azure_storage_account}.blob.core.windows.net/{self.config.azure_container}'
+                    )
+                    """
+                    cursor.execute(create_data_source_sql)
+            except Exception as e:
+                logger.warning(f"Error checking/creating external data source: {str(e)}")
+            
+            # Create file format if it doesn't exist
+            try:
+                cursor.execute("SELECT 1 FROM sys.external_file_formats WHERE name = 'ParquetFileFormat'")
+                if not cursor.fetchone():
+                    create_file_format_sql = """
+                    CREATE EXTERNAL FILE FORMAT ParquetFileFormat
+                    WITH (
+                        FORMAT_TYPE = PARQUET
+                    )
+                    """
+                    cursor.execute(create_file_format_sql)
+            except Exception as e:
+                logger.warning(f"Error checking/creating external file format: {str(e)}")
+            
+            # Extract just the filename from the URL
+            blob_path = blob_url.split(f"{self.config.azure_container}/")[1]
+            
+            # Create external table
+            create_sql = f"""
+            CREATE TABLE {table_name} (
+                {columns_sql}
+            )
+            WITH (
+                LOCATION = '{blob_path}',
+                DATA_SOURCE = ExternalDataSource,
+                FILE_FORMAT = ParquetFileFormat
+            )
+            """
+            
+            cursor.execute(create_sql)
+            logger.info(f"External table {table_name} created successfully in Fabric")
+            
+        except Exception as e:
+            logger.error(f"Failed to create Fabric external table: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise
+    
+    def _execute_fabric_query(self, query: str) -> Tuple[pd.DataFrame, float]:
+        """Execute query in Fabric and return results
+        
+        Args:
+            query: SQL query to execute in Fabric
+            
+        Returns:
+            Tuple containing the result DataFrame and execution time in seconds
+        """
+        try:
+            logger.info(f"Executing Fabric query: {query[:100]}...")
+            
+            if not self.fabric_connection:
+                self.fabric_connection = self._connect_fabric()
+            
+            start_time = time.time()
+            
+            # Execute query and fetch results
+            cursor = self.fabric_connection.cursor()
+            cursor.execute(query)
+            
+            # Fetch column names
+            columns = [column[0] for column in cursor.description]
+            
+            # Fetch data in batches
+            data = []
+            batch = cursor.fetchmany(self.config.batch_size)
+            while batch:
+                data.extend(batch)
+                batch = cursor.fetchmany(self.config.batch_size)
+            
+            execution_time = time.time() - start_time
+            
+            # Convert to DataFrame
+            df = pd.DataFrame.from_records(data, columns=columns)
+            logger.info(f"Fabric query executed successfully in {execution_time:.2f}s. Rows returned: {len(df)}")
+            
+            return df, execution_time
+            
+        except Exception as e:
+            logger.error(f"Failed to execute Fabric query: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise
