@@ -219,3 +219,39 @@ class ConversionTestHarness:
             # Check if row counts match
             if row_count_sql_server != row_count_fabric:
                 warnings.append(f"Row count mismatch: SQL Server={row_count_sql_server}, Fabric={row_count_fabric}")
+            
+            # Calculate data hashes for comparison
+            # First ensure we're comparing the same columns if they exist in both datasets
+            common_columns = list(set(sql_server_df.columns).intersection(set(fabric_df.columns)))
+            
+            if common_columns:
+                sql_server_hash = self.calculate_data_hash(sql_server_df[common_columns])
+                fabric_hash = self.calculate_data_hash(fabric_df[common_columns])
+                data_matches = sql_server_hash == fabric_hash
+                
+                if not data_matches:
+                    warnings.append("Data content differs between SQL Server and Fabric results")
+                    
+                    # Sample some differences for logging
+                    if self.config.detailed_logging and len(sql_server_df) > 0 and len(fabric_df) > 0:
+                        try:
+                            # Sort both dataframes if possible to align rows
+                            if common_columns:
+                                sql_server_df_sorted = sql_server_df[common_columns].sort_values(by=common_columns[0]).reset_index(drop=True)
+                                fabric_df_sorted = fabric_df[common_columns].sort_values(by=common_columns[0]).reset_index(drop=True)
+                                
+                                # Compare the first few rows
+                                sample_size = min(5, len(sql_server_df_sorted), len(fabric_df_sorted))
+                                for i in range(sample_size):
+                                    if not sql_server_df_sorted.iloc[i].equals(fabric_df_sorted.iloc[i]):
+                                        diff = {col: (sql_server_df_sorted.iloc[i][col], fabric_df_sorted.iloc[i][col]) 
+                                                for col in common_columns 
+                                                if sql_server_df_sorted.iloc[i][col] != fabric_df_sorted.iloc[i][col]}
+                                        warnings.append(f"Row {i} differences: {diff}")
+                        except Exception as e:
+                            warnings.append(f"Failed to generate detailed difference report: {str(e)}")
+            else:
+                sql_server_hash = self.calculate_data_hash(sql_server_df)
+                fabric_hash = self.calculate_data_hash(fabric_df)
+                data_matches = False
+                warnings.append("No common columns found between SQL Server and Fabric results")
