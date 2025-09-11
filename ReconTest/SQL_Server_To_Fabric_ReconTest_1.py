@@ -196,3 +196,42 @@ class SQLServerToFabricReconTest:
             self.logger.error(f"Error in data transformation: {str(e)}")
             self.results['errors'].append(f"Data transformation error: {str(e)}")
             return df
+    
+    def upload_to_blob_storage(self, df: pd.DataFrame, blob_name: str) -> bool:
+        """
+        Upload dataframe to Azure Blob Storage
+        
+        Args:
+            df (pd.DataFrame): Dataframe to upload
+            blob_name (str): Name of the blob
+            
+        Returns:
+            bool: True if upload successful, False otherwise
+        """
+        try:
+            # Initialize blob client
+            blob_service_client = BlobServiceClient(
+                account_url=f"https://{self.config['blob_storage']['account_name']}.blob.core.windows.net",
+                credential=DefaultAzureCredential()
+            )
+            
+            container_name = self.config['blob_storage']['container_name']
+            
+            # Convert dataframe to parquet format for better performance
+            parquet_data = df.to_parquet(index=False)
+            
+            # Upload to blob
+            blob_client = blob_service_client.get_blob_client(
+                container=container_name, 
+                blob=f"{blob_name}.parquet"
+            )
+            
+            blob_client.upload_blob(parquet_data, overwrite=True)
+            
+            self.logger.info(f"Data uploaded to blob storage: {blob_name}.parquet")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error uploading to blob storage: {str(e)}")
+            self.results['errors'].append(f"Blob storage upload error: {str(e)}")
+            return False
