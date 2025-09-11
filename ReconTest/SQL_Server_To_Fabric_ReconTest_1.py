@@ -393,3 +393,19 @@ class SQLServerToFabricReconTest:
             'data_differences': [],
             'hash_comparison': {}
         }
+        
+        try:
+            # Row count comparison
+            comparison_results['row_count_match'] = len(sql_server_df) == len(fabric_df)
+            
+            # Column count comparison
+            comparison_results['column_count_match'] = len(sql_server_df.columns) == len(fabric_df.columns)
+            
+            # Schema comparison
+            if not sql_server_df.empty and not fabric_df.empty:
+                sql_columns = set(sql_server_df.columns)
+                fabric_columns = set(fabric_df.columns)
+                
+                comparison_results['missing_in_fabric'] = list(sql_columns - fabric_columns)
+                comparison_results['missing_in_sql_server'] = list(fabric_columns - sql_columns)
+                comparison_results['schema_match'] = sql_columns == fabric_columns
