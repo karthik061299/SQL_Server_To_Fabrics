@@ -326,3 +326,17 @@ class ConversionTestHarness:
             
         self.end_time = time.time()
         logger.info(f"Test execution completed in {self.end_time - self.start_time:.2f} seconds")
+    
+    def generate_report(self):
+        """Generate a detailed test report"""
+        logger.info("Generating test report")
+        
+        # Calculate summary statistics
+        total_tests = len(self.test_results)
+        passed_tests = sum(1 for r in self.test_results if r.passed)
+        failed_tests = total_tests - passed_tests
+        pass_rate = (passed_tests / total_tests) * 100 if total_tests > 0 else 0
+        
+        total_sql_server_time = sum(r.execution_time_sql_server for r in self.test_results)
+        total_fabric_time = sum(r.execution_time_fabric for r in self.test_results)
+        avg_performance_diff = sum(r.performance_diff_percent for r in self.test_results) / total_tests if total_tests > 0 else 0
