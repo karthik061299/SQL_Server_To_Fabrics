@@ -196,3 +196,52 @@ class DataValidator:
                 differences.append(row_diff)
         
         return differences
+    
+    def _compare_single_row(self, sql_row: pd.Series, fabric_row: pd.Series, row_index: int) -> Optional[Dict]:
+        """Compare two rows and return differences if any"""
+        column_differences = []
+        
+        for col in sql_row.index:
+            sql_val = sql_row[col]
+            fabric_val = fabric_row[col]
+            
+            # Handle null values
+            if pd.isna(sql_val) and pd.isna(fabric_val):
+                continue
+            elif pd.isna(sql_val) or pd.isna(fabric_val):
+                column_differences.append({
+                    'column': col,
+                    'sql_value': sql_val,
+                    'fabric_value': fabric_val,
+                    'difference_type': 'null_mismatch'
+                })
+                continue
+            
+            # Handle numeric values with tolerance
+            if isinstance(sql_val, (int, float)) and isinstance(fabric_val, (int, float)):
+                if abs(sql_val - fabric_val) > abs(sql_val * self.config.tolerance_percentage / 100):
+                    column_differences.append({
+                        'column': col,
+                        'sql_value': sql_val,
+                        'fabric_value': fabric_val,
+                        'difference': abs(sql_val - fabric_val),
+                        'difference_type': 'numeric_tolerance_exceeded'
+                    })
+            # Handle string and other types
+            elif str(sql_val) != str(fabric_val):
+                column_differences.append({
+                    'column': col,
+                    'sql_value': sql_val,
+                    'fabric_value': fabric_val,
+                    'difference_type': 'value_mismatch'
+                })
+        
+        if column_differences:
+            return {
+                'type': 'row_data_mismatch',
+                'row_index': row_index,
+                'column_differences': column_differences,
+                'description': f'Data mismatch found in row {row_index}'
+            }
+        
+        return None
