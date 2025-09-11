@@ -1,251 +1,128 @@
 _____________________________________________
 ## *Author*: AAVA
 ## *Created on*:   
-## *Description*:   SQL Server stored procedure for claim transaction measures data processing
+## *Description*:   Documentation for uspSemanticClaimTransactionMeasuresData - Generates and processes claim transaction measures for analytics and reporting.
 ## *Version*: 1 
 ## *Updated on*: 
 _____________________________________________
 
-# Documentation for Stored Procedure: uspSemanticClaimTransactionMeasuresData
+# 1. Overview of Program
 
-## 1. Overview of Program
+This stored procedure, `[Semantic].[uspSemanticClaimTransactionMeasuresData]`, is designed to extract, transform, and load (ETL) claim transaction measures data for enterprise analytics and reporting. It aligns with data warehousing best practices by dynamically generating and processing tables, applying business rules, and ensuring data integrity for downstream reporting and analytics. The procedure supports historical and incremental data loads, handles complex business logic, and provides audit capabilities for changes in claim transactions.
 
-### Purpose
-The stored procedure `uspSemanticClaimTransactionMeasuresData` is designed to extract, transform, and load data for claim transaction measures population in the Semantic layer. It processes claim transaction data from source systems, applies business rules and transformations, and prepares the data for analytical consumption.
+**Business Problem Addressed:**
+- Centralizes claim transaction measures for accurate reporting and analytics.
+- Supports regulatory, actuarial, and operational reporting needs.
+- Automates data refresh and audit tracking for claim transactions.
 
-### Enterprise Data Warehousing Alignment
-This implementation aligns with enterprise data warehousing principles by:
-- Implementing a semantic layer that translates raw data into business-meaningful metrics
-- Supporting data integration from multiple source systems
-- Providing consistent calculation of claim transaction measures
-- Enabling efficient data access for reporting and analytics
+**SQL Server Components Used:**
+- Stored Procedure: `[Semantic].[uspSemanticClaimTransactionMeasuresData]`
+- Tables: `Semantic.ClaimTransactionMeasures`, `Semantic.PolicyRiskStateDescriptors`, `EDSWH.dbo.FactClaimTransactionLineWC`, `edswh.dbo.dimClaimTransactionWC`, `Semantic.ClaimTransactionDescriptors`, `Semantic.ClaimDescriptors`, `Semantic.PolicyDescriptors`, `edswh.dbo.dimBrand`, `Rules.SemanticLayerMetaData`
+- Temporary Tables: Dynamic global temp tables (e.g., `##CTM<spid>`, `##CTMFact<spid>`, etc.)
 
-### Business Problem Addressed
-The procedure addresses the business need for standardized claim transaction metrics that can be used for:
-- Financial reporting and analysis of claims data
-- Tracking of paid and incurred amounts across different claim categories
-- Monitoring recovery amounts by various recovery types
-- Supporting claim analytics and business intelligence
+# 2. Code Structure and Design
 
-### Benefits
-- Consistent calculation of claim metrics across the organization
-- Improved data quality through standardized transformations
-- Enhanced performance for claim transaction reporting
-- Support for historical analysis through effective dating
+- **Structure:**
+  - Declares and initializes dynamic temp table names based on session ID.
+  - Handles input parameter normalization (e.g., adjusts `@pJobStartDateTime` if set to '01/01/1900').
+  - Checks row count in `Semantic.ClaimTransactionMeasures` and disables indexes if empty for performance.
+  - Drops and recreates temp tables for staging data.
+  - Loads data from source tables into temp tables using SELECT INTO.
+  - Applies business rules and transformations using metadata-driven logic from `Rules.SemanticLayerMetaData`.
+  - Joins multiple tables to enrich and validate claim transaction data.
+  - Calculates hash values for audit and change tracking.
+  - Identifies inserted/updated records and sets audit flags.
+  - Outputs final result set for reporting or further ETL.
 
-### SQL Server Components Summary
-- **Stored Procedures**: Main procedure with dynamic SQL generation
-- **Temporary Tables**: Multiple temp tables used for staging and processing
-- **Indexes**: Management of multiple indexes for performance optimization
-- **Dynamic SQL**: Extensive use of dynamic SQL for flexible query construction
-- **Hash Functions**: SHA2_512 hashing for change detection
+- **Key Components:**
+  - DDL: Dynamic creation and dropping of temp tables.
+  - DML: SELECT INTO, INSERT, UPDATE, and dynamic SQL execution.
+  - Joins: INNER JOIN, LEFT JOIN.
+  - Indexing: Disables indexes for performance during bulk operations.
+  - Functions: Uses `ROW_NUMBER()`, `COALESCE`, `CONCAT_WS`, `HASHBYTES`.
+  - Metadata-driven logic: Pulls transformation rules from `Rules.SemanticLayerMetaData`.
 
-## 2. Code Structure and Design
+- **Dependencies:**
+  - Relies on multiple semantic and warehouse tables.
+  - Uses metadata table for transformation logic.
+  - Performance tuning via index management and dynamic SQL.
 
-### Structure
-The stored procedure follows a multi-step process:
-1. Parameter validation and initialization
-2. Temporary table creation and population
-3. Dynamic SQL construction for measure calculations
-4. Data extraction from source tables
-5. Application of business rules and transformations
-6. Change detection using hash values
-7. Final result set generation
+# 3. Data Flow and Processing Logic
 
-### Key Components
+- **Data Flow:**
+  1. Normalize input parameters.
+  2. Check and disable indexes if target table is empty.
+  3. Drop/recreate temp tables for staging.
+  4. Load raw claim transaction data into temp tables.
+  5. Enrich data by joining with descriptors and metadata tables.
+  6. Apply business rules and transformations.
+  7. Calculate hash values for change detection.
+  8. Identify and flag inserted/updated records.
+  9. Output final processed data for reporting.
 
-#### DDL Operations
-- Creation of multiple temporary tables (`##CTM`, `##CTMFact`, `##CTMF`, `##CTPrs`, `##PRDCLmTrans`)
-- Index management (disabling/enabling indexes for bulk operations)
+- **Source Tables:**
+  - `Semantic.ClaimTransactionMeasures`
+  - `EDSWH.dbo.FactClaimTransactionLineWC`
+  - `edswh.dbo.dimClaimTransactionWC`
+  - `Semantic.ClaimTransactionDescriptors`
+  - `Semantic.ClaimDescriptors`
+  - `Semantic.PolicyDescriptors`
+  - `edswh.dbo.dimBrand`
+  - `Semantic.PolicyRiskStateDescriptors`
+  - `Rules.SemanticLayerMetaData`
 
-#### DML Operations
-- SELECT operations to extract data from source tables
-- INSERT operations to populate temporary tables
-- JOIN operations to combine data from multiple sources
+- **Destination Tables:**
+  - Dynamic temp tables (e.g., `##CTM<spid>`, `##CTMFact<spid>`, `##CTMF<spid>`, etc.)
 
-#### Joins
-- INNER JOINs for required relationships
-- LEFT JOINs for optional relationships (e.g., policy risk state data)
+- **Transformations:**
+  - Filtering by date and retired indicator.
+  - Joins for enrichment and validation.
+  - Aggregations and calculations via metadata-driven logic.
+  - Hashing for audit/change tracking.
 
-#### Indexing
-- Management of multiple indexes on the target table
-- Conditional disabling/enabling of indexes based on data volume
-
-#### Functions
-- Aggregate functions for measure calculations
-- Hash functions (SHA2_512) for change detection
-- String functions (CONCAT_WS) for key generation
-
-### Primary SQL Server Components
-
-#### Tables
-- Source tables: `EDSWH.dbo.FactClaimTransactionLineWC`, `EDSWH.dbo.dimClaimTransactionWC`, `EDSWH.dbo.dimBrand`
-- Semantic layer tables: `Semantic.ClaimTransactionDescriptors`, `Semantic.ClaimDescriptors`, `Semantic.PolicyDescriptors`, `Semantic.PolicyRiskStateDescriptors`
-- Target table: `Semantic.ClaimTransactionMeasures`
-
-#### Temporary Tables
-- `##CTM` + spid: Main temporary table for transformed data
-- `##CTMFact` + spid: Temporary table for fact data
-- `##CTMF` + spid: Final temporary table with change detection
-- `##CTPrs` + spid: Temporary table for policy risk state data
-- `##PRDCLmTrans` + spid: Temporary table for existing production data
-
-#### Common Table Expressions (CTEs)
-- `C1`: CTE for hash value calculation and change detection
-
-#### Dynamic SQL
-- Dynamic construction of measure calculations from `Rules.SemanticLayerMetaData`
-
-### Dependencies
-- `Rules.SemanticLayerMetaData`: Contains measure definitions and calculation logic
-- `Semantic.ClaimTransactionMeasures`: Target table for the processed data
-- `Semantic.ClaimTransactionDescriptors`, `Semantic.ClaimDescriptors`, `Semantic.PolicyDescriptors`: Descriptor tables for dimension data
-
-## 3. Data Flow and Processing Logic
-
-### Data Flow
-1. **Source Data Extraction**:
-   - Extract claim transaction data from `EDSWH.dbo.FactClaimTransactionLineWC` and `EDSWH.dbo.dimClaimTransactionWC`
-   - Extract policy risk state data from `Semantic.PolicyRiskStateDescriptors`
-   - Extract existing production data from `Semantic.ClaimTransactionMeasures`
-
-2. **Data Transformation**:
-   - Join transaction data with descriptor tables
-   - Apply business rules from `Rules.SemanticLayerMetaData`
-   - Calculate measures for various claim transaction categories
-
-3. **Change Detection**:
-   - Generate hash values for change detection
-   - Compare with existing production data
-   - Mark records for insert or update
-
-4. **Data Loading**:
-   - Return final result set for loading into `Semantic.ClaimTransactionMeasures`
-
-### Source and Destination Tables
-
-#### Source Tables
-- `EDSWH.dbo.FactClaimTransactionLineWC`: Contains claim transaction line items
-- `EDSWH.dbo.dimClaimTransactionWC`: Contains claim transaction dimension data
-- `Semantic.ClaimTransactionDescriptors`: Contains descriptive data for claim transactions
-- `Semantic.ClaimDescriptors`: Contains descriptive data for claims
-- `Semantic.PolicyDescriptors`: Contains descriptive data for policies
-- `Semantic.PolicyRiskStateDescriptors`: Contains risk state data for policies
-- `EDSWH.dbo.dimBrand`: Contains brand dimension data
-
-#### Destination Table
-- `Semantic.ClaimTransactionMeasures`: Target table for the processed claim transaction measures
-
-### Transformations
-
-1. **Filtering**:
-   - Filter by load update date (`LoadUpdateDate >= @pJobStartDateTime`)
-   - Filter policy risk state data to exclude retired records (`RetiredInd = 0`)
-
-2. **Joins**:
-   - Join transaction data with descriptor tables
-   - Join policy data with risk state data based on policy key and risk state
-
-3. **Aggregations**:
-   - Apply measure calculations as defined in `Rules.SemanticLayerMetaData`
-
-4. **Field Calculations**:
-   - Calculate hash values for change detection
-   - Determine insert/update operations
-   - Set audit fields (LoadUpdateDate, LoadCreateDate)
-
-## 4. Data Mapping
+# 4. Data Mapping
 
 | Target Table Name | Target Column Name | Source Table Name | Source Column Name | Remarks |
-|-------------------|-------------------|-------------------|-------------------|----------|
-| Semantic.ClaimTransactionMeasures | FactClaimTransactionLineWCKey | EDSWH.dbo.FactClaimTransactionLineWC | FactClaimTransactionLineWCKey | 1:1 mapping |
-| Semantic.ClaimTransactionMeasures | RevisionNumber | EDSWH.dbo.FactClaimTransactionLineWC | RevisionNumber | COALESCE(RevisionNumber, 0) |
-| Semantic.ClaimTransactionMeasures | PolicyWCKey | EDSWH.dbo.FactClaimTransactionLineWC | PolicyWCKey | 1:1 mapping |
-| Semantic.ClaimTransactionMeasures | PolicyRiskStateWCKey | Semantic.PolicyRiskStateDescriptors | PolicyRiskStateWCKey | COALESCE(PolicyRiskStateWCKey, -1) |
-| Semantic.ClaimTransactionMeasures | ClaimWCKey | EDSWH.dbo.FactClaimTransactionLineWC | ClaimWCKey | 1:1 mapping |
-| Semantic.ClaimTransactionMeasures | ClaimTransactionLineCategoryKey | EDSWH.dbo.FactClaimTransactionLineWC | ClaimTransactionLineCategoryKey | 1:1 mapping |
-| Semantic.ClaimTransactionMeasures | ClaimTransactionWCKey | EDSWH.dbo.FactClaimTransactionLineWC | ClaimTransactionWCKey | 1:1 mapping |
-| Semantic.ClaimTransactionMeasures | ClaimCheckKey | EDSWH.dbo.FactClaimTransactionLineWC | ClaimCheckKey | 1:1 mapping |
-| Semantic.ClaimTransactionMeasures | AgencyKey | Semantic.PolicyDescriptors | AgencyKey | COALESCE(AgencyKey, -1) |
-| Semantic.ClaimTransactionMeasures | SourceClaimTransactionCreateDate | EDSWH.dbo.FactClaimTransactionLineWC | SourceTransactionLineItemCreateDate | 1:1 mapping with column rename |
-| Semantic.ClaimTransactionMeasures | SourceClaimTransactionCreateDateKey | EDSWH.dbo.FactClaimTransactionLineWC | SourceTransactionLineItemCreateDateKey | 1:1 mapping with column rename |
-| Semantic.ClaimTransactionMeasures | TransactionCreateDate | Semantic.ClaimTransactionDescriptors | SourceTransactionCreateDate | 1:1 mapping |
-| Semantic.ClaimTransactionMeasures | TransactionSubmitDate | Semantic.ClaimTransactionDescriptors | TransactionSubmitDate | 1:1 mapping |
-| Semantic.ClaimTransactionMeasures | SourceSystem | EDSWH.dbo.FactClaimTransactionLineWC | SourceSystem | 1:1 mapping |
-| Semantic.ClaimTransactionMeasures | RecordEffectiveDate | EDSWH.dbo.FactClaimTransactionLineWC | RecordEffectiveDate | 1:1 mapping |
-| Semantic.ClaimTransactionMeasures | SourceSystemIdentifier | EDSWH.dbo.FactClaimTransactionLineWC | FactClaimTransactionLineWCKey, RevisionNumber | CONCAT_WS('~', FactClaimTransactionLineWCKey, RevisionNumber) |
-| Semantic.ClaimTransactionMeasures | TransactionAmount | EDSWH.dbo.FactClaimTransactionLineWC | TransactionAmount | 1:1 mapping |
-| Semantic.ClaimTransactionMeasures | RetiredInd | EDSWH.dbo.FactClaimTransactionLineWC | RetiredInd | 1:1 mapping |
-| Semantic.ClaimTransactionMeasures | HashValue | Calculated | Multiple columns | SHA2_512 hash of all relevant columns |
-| Semantic.ClaimTransactionMeasures | LoadUpdateDate | System | GETDATE() | Current timestamp |
-| Semantic.ClaimTransactionMeasures | LoadCreateDate | Existing or System | COALESCE(existing.LoadCreateDate, GETDATE()) | Preserved or new timestamp |
-| Semantic.ClaimTransactionMeasures | Various measure columns | Rules.SemanticLayerMetaData | Calculated | Dynamically generated based on rules |
+|-------------------|--------------------|-------------------|--------------------|---------|
+| ##CTM<spid>       | Various Measures   | FactClaimTransactionLineWC, ClaimTransactionDescriptors, ClaimDescriptors, PolicyDescriptors, dimBrand, PolicyRiskStateDescriptors | Various | 1-to-1 and transformation rules from Rules.SemanticLayerMetaData |
+| ##CTMF<spid>      | AuditOperations, InsertUpdates, HashValue | ##CTM<spid>, ##PRDCLmTrans<spid> | Various | Hashing and audit logic applied |
+| ##CTMFact<spid>   | FactClaimTransactionLineWCKey, RevisionNumber, PolicyWCKey, etc. | EDSWH.dbo.FactClaimTransactionLineWC | Various | 1-to-1 mapping |
+| ##CTPrs<spid>     | PolicyWCKey, RiskState, RetiredInd, etc. | Semantic.PolicyRiskStateDescriptors | Various | Filtered by RetiredInd = 0, latest record per PolicyWCKey/RiskState |
+| ##PRDCLmTrans<spid> | FactClaimTransactionLineWCKey, RevisionNumber, HashValue, LoadCreateDate | Semantic.ClaimTransactionMeasures | Various | Used for audit comparison |
 
-## 5. Complexity Analysis
+# 5. Complexity Analysis
 
-| Category | Metric | Value |
-|----------|--------|-------|
-| Number of Lines | Count of lines in the SQL script | 450+ |
-| Tables Used | Number of tables referenced | 9+ |
-| Joins | Number of joins and types used | 5+ (INNER JOIN, LEFT JOIN) |
-| Temporary Tables | Number of Temp Tables or Table Variables | 5 |
-| Aggregate Functions | Number of Aggregate Functions | 10+ (dynamically generated) |
-| DML Statements | Number of DML statements by type | SELECT: 10+, INSERT: 5+, DROP: 5+ |
-| Conditional Logic | Number of CASE WHEN statements, IF-ELSE blocks | 5+ |
-| Query Complexity | Number of joins, subqueries, and CTEs | High (10+ joins, 1+ CTEs, multiple subqueries) |
-| Performance Considerations | Query execution time and memory consumption | High (index management, temp tables) |
-| Data Volume Handling | Number of records processed | High (enterprise-scale claim data) |
-| Dependency Complexity | External dependencies | High (multiple descriptor tables, rules metadata) |
-| Overall Complexity Score | Score from 0 to 100 | 85 |
+| Category                | Measurement |
+|-------------------------|------------|
+| Number of Lines         | ~250 |
+| Tables Used             | 10+ |
+| Joins                   | 8 (INNER JOIN, LEFT JOIN) |
+| Temporary Tables        | 5+ (dynamic global temp tables) |
+| Aggregate Functions     | 0 (aggregation logic via metadata, but not explicit SUM/AVG) |
+| DML Statements          | SELECT INTO, dynamic SELECT, INSERT, UPDATE |
+| Conditional Logic       | Multiple CASE, IF blocks |
+| Query Complexity        | High (multiple joins, subqueries, dynamic SQL, metadata-driven logic) |
+| Performance Considerations | Index disabling, dynamic temp tables, NOCOUNT, XACT_ABORT |
+| Data Volume Handling    | Designed for bulk ETL, handles large record sets |
+| Dependency Complexity   | High (metadata table, multiple semantic/warehouse tables) |
+| Overall Complexity Score| 85 |
 
-## 6. Key Outputs
+# 6. Key Outputs
 
-### Final Outputs
+- **Final Outputs:**
+  - Processed claim transaction measures with audit flags and hash values.
+  - Output format: Result set from temp table `##CTMF<spid>` containing all enriched and transformed columns.
+  - Includes audit columns (`InsertUpdates`, `AuditOperations`, `HashValue`, `LoadUpdateDate`, `LoadCreateDate`).
 
-The primary output is a result set containing claim transaction measures data, which includes:
+- **Business Alignment:**
+  - Enables accurate, auditable reporting for claims analytics.
+  - Supports regulatory and operational reporting needs.
+  - Provides change tracking for incremental ETL and data warehousing.
 
-1. **Claim Transaction Identifiers**:
-   - FactClaimTransactionLineWCKey
-   - RevisionNumber
-   - PolicyWCKey
-   - ClaimWCKey
-   - ClaimTransactionWCKey
-   - ClaimCheckKey
+- **Storage Format:**
+  - Staging via global temp tables.
+  - Final output as result set for downstream ETL or reporting.
 
-2. **Financial Measures**:
-   - Net Paid amounts (Indemnity, Medical, Expense, etc.)
-   - Net Incurred amounts (Indemnity, Medical, Expense, etc.)
-   - Gross Paid amounts (Indemnity, Medical, Expense, etc.)
-   - Gross Incurred amounts (Indemnity, Medical, Expense, etc.)
-   - Reserves (Indemnity, Medical, Expense, etc.)
-   - Recovery amounts by type (Deductible, Subrogation, etc.)
+# 7. apiCost
 
-3. **Metadata**:
-   - HashValue for change detection
-   - InsertUpdates flag (1 for insert, 0 for update, 3 for no change)
-   - AuditOperations description ('Inserted', 'Updated', or NULL)
-   - LoadUpdateDate and LoadCreateDate for auditing
-
-### Business Alignment
-
-The outputs align with business goals by providing:
-
-1. **Financial Reporting**:
-   - Standardized claim transaction measures for financial reporting
-   - Consistent calculation of paid, incurred, and recovery amounts
-
-2. **Claims Analysis**:
-   - Detailed breakdown of claim costs by category
-   - Support for trend analysis and forecasting
-
-3. **Operational Efficiency**:
-   - Optimized data structure for reporting performance
-   - Change detection to minimize data processing
-
-### Storage Format
-
-The data is stored in the production table `Semantic.ClaimTransactionMeasures`, which serves as a semantic layer for business intelligence and reporting tools. The procedure uses temporary tables for intermediate processing before returning the final result set for loading into the production table.
-
-## 7. API Cost
-
-API cost for this documentation generation: $0.0000
+apiCost: 0.004 USD
