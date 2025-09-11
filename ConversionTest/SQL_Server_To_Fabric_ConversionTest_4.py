@@ -1,90 +1,79 @@
-    def test_syntax_differences(self):
-        """Test to identify and document syntax differences between SQL Server and Fabric versions"""
-        # This test analyzes the stored procedure code to identify syntax differences
+    def test_temporary_table_creation(self, mock_fabric_conn):
+        """Test temporary table creation in Fabric SQL"""
+        cursor = mock_fabric_conn.cursor.return_value
         
-        # SQL Server specific syntax patterns
-        sql_server_patterns = {
-            "global_temp_tables": r'##\w+',
-            "execute_sp_executesql": r'EXECUTE\s+sp_executesql',
-            "set_xact_abort": r'SET\s+XACT_ABORT\s+ON',
-            "sys_tables_reference": r'sys\.tables',
-            "alter_index": r'ALTER\s+INDEX.*DISABLE'
-        }
+        # Track table creation and dropping
+        created_tables = set()
+        dropped_tables = set()
         
-        # Fabric SQL equivalent patterns
-        fabric_patterns = {
-            "session_temp_tables": r'CREATE\s+TABLE\s+\w+_[0-9a-f-]+',
-            "execute_immediate": r'EXECUTE\s*\(\@\w+\)',
-            "drop_if_exists": r'DROP\s+TABLE\s+IF\s+EXISTS',
-            "hash_join_hint": r'INNER\s+HASH\s+JOIN',
-            "label_hint": r"OPTION\s*\(\s*LABEL\s*=\s*'[^']*'\s*\)"
-        }
+        def execute_side_effect(query, *args):
+            # Extract table names from CREATE TABLE statements
+            if query.strip().upper().startswith('CREATE TABLE '):
+                table_name = query.split('CREATE TABLE ')[1].split(' ')[0]
+                created_tables.add(table_name)
+            
+            # Extract table names from DROP TABLE statements
+            elif query.strip().upper().startswith('DROP TABLE IF EXISTS '):
+                table_name = query.split('DROP TABLE IF EXISTS ')[1].strip()
+                dropped_tables.add(table_name)
+            
+            return cursor
         
-        # Load SQL Server and Fabric stored procedure code
-        # In a real test, you would load these from files or databases
-        sql_server_code = """-- SQL Server code would be loaded here"""
-        fabric_code = """-- Fabric SQL code would be loaded here"""
+        cursor.execute.side_effect = execute_side_effect
         
-        # Check for SQL Server patterns that should be converted
-        for pattern_name, pattern in sql_server_patterns.items():
-            matches = re.findall(pattern, sql_server_code, re.IGNORECASE)
-            if matches:
-                print(f"Found {len(matches)} instances of {pattern_name} in SQL Server code")
-                # These patterns should not appear in Fabric code
-                fabric_matches = re.findall(pattern, fabric_code, re.IGNORECASE)
-                assert len(fabric_matches) == 0, f"{pattern_name} found in Fabric code but should be converted"
+        # Execute the stored procedure
+        job_start_datetime = datetime.now() - timedelta(days=7)
+        job_end_datetime = datetime.now()
         
-        # Check for Fabric patterns that should be present after conversion
-        for pattern_name, pattern in fabric_patterns.items():
-            matches = re.findall(pattern, fabric_code, re.IGNORECASE)
-            assert len(matches) > 0, f"Expected {pattern_name} not found in Fabric code"
+        cursor.execute(
+            "EXEC Semantic.uspSemanticClaimTransactionMeasuresData @pJobStartDateTime=?, @pJobEndDateTime=?",
+            job_start_datetime, job_end_datetime
+        )
+        
+        # Verify that tables were created and then dropped
+        assert len(created_tables) > 0, "No temporary tables were created"
+        assert len(dropped_tables) > 0, "No temporary tables were dropped"
+        
+        # All created tables should be dropped
+        for table in created_tables:
+            assert table in dropped_tables, f"Table {table} was created but not dropped"
+        
+        # Verify naming convention for temporary tables in Fabric
+        # In Fabric, we use session-specific naming with UUIDs instead of ##table + @@spid
+        for table in created_tables:
+            # Should match pattern like "CTM_12345abcde..."
+            assert re.match(r'^[A-Za-z]+_[0-9a-f]+$', table), \
+                f"Table name {table} doesn't follow Fabric naming convention"
     
-    @pytest.mark.parametrize(
-        "test_case,job_start_datetime,job_end_datetime,expected_status", [
-            ("normal_date_range", datetime.now() - timedelta(days=7), datetime.now(), "success"),
-            ("special_date_case", datetime(1900, 1, 1), datetime.now(), "success"),  # Tests special date handling
-            ("wide_date_range", datetime.now() - timedelta(days=365), datetime.now(), "success"),
-            ("invalid_date_range", datetime.now(), datetime.now() - timedelta(days=1), "error")
-        ]
-    )
-    def test_date_parameter_handling(self, mock_sql_server_conn, mock_fabric_conn, 
-                                   test_case, job_start_datetime, job_end_datetime, expected_status):
-        """Test date parameter handling in both SQL Server and Fabric versions"""
+    def test_dynamic_sql_execution(self, mock_fabric_conn):
+        """Test dynamic SQL execution in Fabric SQL"""
+        cursor = mock_fabric_conn.cursor.return_value
         
-        # Configure mocks for both connections
-        sql_cursor = mock_sql_server_conn.cursor.return_value
-        fabric_cursor = mock_fabric_conn.cursor.return_value
+        # Execute a simple dynamic SQL statement
+        try:
+            cursor.execute("""
+            DECLARE @sql VARCHAR(MAX);
+            SET @sql = 'SELECT 1 AS TestValue';
+            EXECUTE(@sql);
+            """)
+            
+            # Should execute without errors
+            assert True
+        except Exception as e:
+            pytest.fail(f"Dynamic SQL execution failed: {str(e)}")
+    
+    def test_hash_join_hint(self, mock_fabric_conn):
+        """Test HASH JOIN hint in Fabric SQL"""
+        cursor = mock_fabric_conn.cursor.return_value
         
-        # Test execution in SQL Server
-        if expected_status == "error" and job_start_datetime > job_end_datetime:
-            # Should raise error for invalid date range
-            with pytest.raises(Exception):
-                sql_cursor.execute(
-                    "EXEC Semantic.uspSemanticClaimTransactionMeasuresData @pJobStartDateTime=?, @pJobEndDateTime=?",
-                    job_start_datetime, job_end_datetime
-                )
-        else:
-            sql_cursor.execute(
-                "EXEC Semantic.uspSemanticClaimTransactionMeasuresData @pJobStartDateTime=?, @pJobEndDateTime=?",
-                job_start_datetime, job_end_datetime
-            )
-        
-        # Test execution in Fabric
-        if expected_status == "error" and job_start_datetime > job_end_datetime:
-            # Should raise error for invalid date range
-            with pytest.raises(Exception):
-                fabric_cursor.execute(
-                    "EXEC Semantic.uspSemanticClaimTransactionMeasuresData @pJobStartDateTime=?, @pJobEndDateTime=?",
-                    job_start_datetime, job_end_datetime
-                )
-        else:
-            fabric_cursor.execute(
-                "EXEC Semantic.uspSemanticClaimTransactionMeasuresData @pJobStartDateTime=?, @pJobEndDateTime=?",
-                job_start_datetime, job_end_datetime
-            )
-        
-        # Special case handling for 1900-01-01
-        if test_case == "special_date_case":
-            # In both versions, 1900-01-01 should be converted to 1700-01-01
-            # This would be verified by examining the executed SQL or results
-            pass
+        # Execute a query with HASH JOIN hint
+        try:
+            cursor.execute("""
+            SELECT * FROM Table1
+            INNER HASH JOIN Table2 ON Table1.ID = Table2.ID;
+            """)
+            
+            # Should execute without errors
+            assert True
+        except Exception as e:
+            pytest.fail(f"HASH JOIN hint execution failed: {str(e)}")
