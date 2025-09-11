@@ -351,3 +351,101 @@ class TestUspSemanticClaimTransactionMeasuresData:
             assert base_data.iloc[i]['RecoverySubrogation'] == expected_recovery_subrogation[i]
         
         logger.info("Measure calculations test passed")
+    
+    def test_hash_value_generation(self, setup_test_environment):
+        """
+        Test Case 5: Verify hash value generation for change detection
+        """
+        logger.info("Testing hash value generation")
+        
+        test_data = setup_test_environment['test_data']
+        fact_data = test_data['fact_claim_data'].copy()
+        
+        # Add some calculated measures for hash generation
+        fact_data['NetPaidIndemnity'] = [Decimal('900.00'), Decimal('0.00'), Decimal('0.00'), 
+                                       Decimal('0.00'), Decimal('0.00')]
+        fact_data['GrossIncurredLoss'] = [Decimal('6000.00'), Decimal('10000.00'), Decimal('2000.00'), 
+                                        Decimal('5500.00'), Decimal('9000.00')]
+        
+        # Generate hash values using the Fabric approach
+        def generate_hash(row):
+            # Simulate the HASHBYTES function in Fabric SQL
+            hash_input = f"{row['FactClaimTransactionLineWCKey']}~{row['RevisionNumber']}~{row['PolicyWCKey']}~" + \
+                        f"{row['ClaimWCKey']}~{row['NetPaidIndemnity']}~{row['GrossIncurredLoss']}"
+            return hashlib.sha512(hash_input.encode()).hexdigest()[:512]  # Limit to 512 chars
+        
+        fact_data['HashValue'] = fact_data.apply(generate_hash, axis=1)
+        
+        # Assertions
+        assert 'HashValue' in fact_data.columns
+        assert fact_data['HashValue'].nunique() == len(fact_data)  # All hashes should be unique
+        
+        # Verify hash consistency
+        for i, row in fact_data.iterrows():
+            regenerated_hash = generate_hash(row)
+            assert row['HashValue'] == regenerated_hash
+        
+        logger.info("Hash value generation test passed")
+    
+    def test_insert_update_logic(self, setup_test_environment):
+        """
+        Test Case 6: Verify insert/update logic based on hash comparison
+        """
+        logger.info("Testing insert/update logic")
+        
+        test_data = setup_test_environment['test_data']
+        
+        # Create current data
+        current_data = test_data['fact_claim_data'].copy()
+        current_data['HashValue'] = ['hash1', 'hash2', 'hash3', 'hash4', 'hash5']
+        
+        # Create production data (simulating existing data in the target table)
+        prod_data = pd.DataFrame({
+            'FactClaimTransactionLineWCKey': [1, 2, 6],  # 1,2 exist, 6 doesn't exist in current
+            'RevisionNumber': [1, 1, 1],
+            'HashValue': ['hash1', 'hash2_old', 'hash6'],  # hash2 is different
+            'LoadCreateDate': [datetime(2024, 1, 1), datetime(2024, 1, 1), datetime(2024, 1, 1)]
+        })
+        
+        # Apply insert/update logic
+        result_data = []
+        for _, row in current_data.iterrows():
+            # Check if record exists in prod_data
+            prod_row = prod_data[(prod_data['FactClaimTransactionLineWCKey'] == row['FactClaimTransactionLineWCKey']) & 
+                                (prod_data['RevisionNumber'] == row['RevisionNumber'])]
+            
+            if len(prod_row) == 0:
+                # Insert case
+                result_data.append({
+                    'FactClaimTransactionLineWCKey': row['FactClaimTransactionLineWCKey'],
+                    'RevisionNumber': row['RevisionNumber'],
+                    'HashValue': row['HashValue'],
+                    'InsertUpdates': 1,
+                    'AuditOperations': 'Inserted',
+                    'LoadCreateDate': datetime.now()
+                })
+            elif prod_row.iloc[0]['HashValue'] != row['HashValue']:
+                # Update case
+                result_data.append({
+                    'FactClaimTransactionLineWCKey': row['FactClaimTransactionLineWCKey'],
+                    'RevisionNumber': row['RevisionNumber'],
+                    'HashValue': row['HashValue'],
+                    'InsertUpdates': 0,
+                    'AuditOperations': 'Updated',
+                    'LoadCreateDate': prod_row.iloc[0]['LoadCreateDate']
+                })
+            # No action for unchanged records
+        
+        result_df = pd.DataFrame(result_data)
+        
+        # Assertions
+        assert len(result_df) == 4  # 3 inserts (3,4,5) + 1 update (2)
+        
+        inserts = result_df[result_df['AuditOperations'] == 'Inserted']
+        updates = result_df[result_df['AuditOperations'] == 'Updated']
+        
+        assert len(inserts) == 3
+        assert len(updates) == 1
+        assert updates.iloc[0]['FactClaimTransactionLineWCKey'] == 2
+        
+        logger.info("Insert/update logic test passed")
