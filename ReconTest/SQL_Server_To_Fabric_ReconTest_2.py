@@ -316,3 +316,26 @@ class DataValidator:
             }
         
         return None
+    
+    def execute_sql_server_procedure(self, parameters: Dict = None) -> Tuple[pd.DataFrame, float]:
+        """Execute the stored procedure in SQL Server"""
+        logger.info(f"Executing {self.config.stored_procedure_name} in SQL Server")
+        
+        if not self.sql_connector.connect():
+            raise Exception("Failed to connect to SQL Server")
+        
+        try:
+            # Build the procedure call
+            if parameters:
+                param_string = ', '.join([f"@{k}=?" for k in parameters.keys()])
+                query = f"EXEC {self.config.stored_procedure_name} {param_string}"
+                param_values = list(parameters.values())
+            else:
+                query = f"EXEC {self.config.stored_procedure_name}"
+                param_values = None
+            
+            df, execution_time = self.sql_connector.execute_query(query, param_values)
+            return df, execution_time
+        
+        finally:
+            self.sql_connector.close()
