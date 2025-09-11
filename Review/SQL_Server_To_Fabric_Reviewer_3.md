@@ -433,3 +433,83 @@ except Exception as e:
 ```
 
 **Impact:** Medium - Complete redesign of error handling approach
+
+## 4. Optimization Suggestions
+
+### 4.1 Architectural Redesign
+
+**Current Approach:**
+Monolithic stored procedure with complex dynamic SQL generation.
+
+**Recommended Optimization:**
+
+```
+Modular Notebook Architecture:
+
+1. Main Orchestration Notebook
+   ├── Parameter validation and initialization
+   ├── Execution logging
+   └── Orchestration of child notebooks
+
+2. Data Extraction Notebook
+   ├── Source data retrieval
+   ├── Initial filtering
+   └── Temporary view creation
+
+3. Data Transformation Notebook
+   ├── Join operations
+   ├── Measure calculations
+   └── Hash value generation
+
+4. Data Loading Notebook
+   ├── Change detection
+   ├── Delta table updates
+   └── Result reporting
+
+5. Utility Notebooks
+   ├── Logging functions
+   ├── Error handling
+   └── Performance monitoring
+```
+
+**Implementation Example:**
+```python
+# 1. Main Orchestration Notebook
+
+# Parameter widgets
+dbutils.widgets.text("pJobStartDateTime", "")
+dbutils.widgets.text("pJobEndDateTime", "")
+
+# Get parameters
+start_date = dbutils.widgets.get("pJobStartDateTime")
+end_date = dbutils.widgets.get("pJobEndDateTime")
+
+# Parameter validation
+if not start_date or not end_date:
+    raise ValueError("Start date and end date are required")
+
+# Special date handling
+if start_date == "01/01/1900":
+    start_date = "01/01/1700"
+
+# Start logging
+log_execution_start("uspSemanticClaimTransactionMeasuresData", {"start_date": start_date, "end_date": end_date})
+
+try:
+    # Run extraction notebook
+    dbutils.notebook.run("./1_Data_Extraction", timeout_seconds=3600, arguments={"start_date": start_date, "end_date": end_date})
+    
+    # Run transformation notebook
+    dbutils.notebook.run("./2_Data_Transformation", timeout_seconds=3600)
+    
+    # Run loading notebook
+    result = dbutils.notebook.run("./3_Data_Loading", timeout_seconds=3600)
+    
+    # Log success
+    log_execution_success("uspSemanticClaimTransactionMeasuresData", result)
+    
+except Exception as e:
+    # Log failure
+    log_execution_failure("uspSemanticClaimTransactionMeasuresData", str(e))
+    raise
+```
