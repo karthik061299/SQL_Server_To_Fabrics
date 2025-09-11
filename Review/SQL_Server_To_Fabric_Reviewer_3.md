@@ -48,149 +48,392 @@ The procedure's primary purpose is to process claim transaction data, apply busi
 | Procedural logic | ❌ Low | BEGIN/END blocks not supported | Algorithmic redesign required |
 | Dynamic SQL execution | ❌ Low | sp_executesql not available | Complete redesign required |
 
-## 5. Overall Assessment
+## 3. Discrepancies and Issues
 
-### 5.1 Conversion Complexity
+### 3.1 Critical Issues
 
-**Overall Complexity Rating: HIGH**
+#### 3.1.1 Stored Procedure Architecture
 
-| Component | Complexity | Effort (Days) | Risk | Key Challenges |
-|-----------|------------|---------------|------|----------------|
-| Stored Procedure Architecture | High | 5-7 | High | Fundamental paradigm shift from procedural to notebook-based |
-| Temporary Data Storage | High | 3-4 | High | Different temporary data handling mechanisms |
-| Dynamic SQL Replacement | High | 4-5 | High | Complex string manipulation to functional approach |
-| Hash Value Generation | Medium | 1-2 | Medium | Function replacement with equivalent functionality |
-| Date Handling | Low | 0.5 | Low | Simple value replacement |
-| Performance Optimization | High | 3-4 | High | Different optimization techniques required |
-| Error Handling | Medium | 1-2 | Medium | Different error handling paradigm |
-| **Total** | **High** | **18-24.5** | **High** | **Architectural redesign with complex logic preservation** |
+**Issue**: Fabric doesn't support traditional stored procedures
 
-### 5.2 Performance Considerations
+**SQL Server Implementation:**
+```sql
+ALTER procedure [Semantic].[uspSemanticClaimTransactionMeasuresData]
+(
+    @pJobStartDateTime datetime2
+  , @pJobEndDateTime datetime2
+)
+as
+begin
+    -- Procedure body
+end;
+```
 
-- **Distributed Processing**: Fabric's distributed architecture offers potential performance improvements for large datasets
-- **Memory Management**: Careful consideration needed for caching and persistence strategies
-- **Query Optimization**: Different optimization techniques required for Spark SQL
-- **Data Partitioning**: Critical for performance with large datasets
-- **Join Strategies**: Broadcast joins for dimension tables, shuffle joins for large fact tables
-- **Batch Processing**: Consider implementing batch processing for very large datasets
-- **Resource Allocation**: Proper configuration of executor memory and cores
-- **Data Skew Handling**: Implement strategies to handle data skew in distributed processing
-- **Caching Strategy**: Optimize caching of frequently accessed data
+**Fabric Solution:**
+```python
+# Fabric Notebook implementation
+# Parameters as notebook widgets
+dbutils.widgets.text("pJobStartDateTime", "")
+dbutils.widgets.text("pJobEndDateTime", "")
 
-### 5.3 Maintainability Assessment
+# Get parameters
+pJobStartDateTime = dbutils.widgets.get("pJobStartDateTime")
+pJobEndDateTime = dbutils.widgets.get("pJobEndDateTime")
 
-- **Code Complexity**: Improved through modular notebook design
-- **Error Handling**: Enhanced with comprehensive logging and monitoring
-- **Documentation**: Critical for understanding the new architecture
-- **Testability**: Improved through smaller, focused components
-- **Scalability**: Better with Fabric's distributed processing capabilities
-- **Monitoring**: Enhanced through built-in Spark monitoring tools
-- **Version Control**: Better integration with modern version control systems
-- **CI/CD Integration**: Improved pipeline integration possibilities
-- **Knowledge Transfer**: Requires training for SQL Server developers on Fabric concepts
+# Main processing function
+def process_semantic_claim_transaction_measures(start_date, end_date):
+    # Processing logic implemented in Python/Spark
+    # Return results as DataFrame
+    
+# Execute the function
+result_df = process_semantic_claim_transaction_measures(pJobStartDateTime, pJobEndDateTime)
+```
 
-## 6. Recommendations
+**Impact:** High - Requires complete architectural redesign
 
-### 6.1 Migration Strategy
+#### 3.1.2 Session ID and Temporary Table Management
 
-1. **Phased Approach**
-   - Phase 1: Architecture design and proof of concept (2-3 weeks)
-   - Phase 2: Core functionality implementation (3-4 weeks)
-   - Phase 3: Performance optimization (2-3 weeks)
-   - Phase 4: Testing and validation (2-3 weeks)
-   - Phase 5: Deployment and monitoring (1-2 weeks)
+**Issue**: Fabric doesn't support global temporary tables with session-specific naming
 
-2. **Testing Strategy**
-   - Develop comprehensive test cases with expected outputs
-   - Implement data validation procedures comparing SQL Server and Fabric results
-   - Create automated regression tests for critical functionality
-   - Perform performance testing with production-like data volumes
-   - Conduct stress testing and failure recovery testing
-   - Implement A/B testing during transition period
+**SQL Server Implementation:**
+```sql
+declare @TabName varchar(100);
+select @TabName = '##CTM' + cast(@@spid as varchar(10));
 
-3. **Risk Mitigation**
-   - Maintain parallel environments during migration
-   - Implement detailed logging for troubleshooting
-   - Create rollback procedures for each deployment phase
-   - Conduct thorough code reviews with both SQL and Fabric experts
-   - Perform incremental testing throughout development
-   - Document all architectural decisions and their rationales
-   - Establish clear success criteria for each migration phase
+set @Select_SQL_Query = N'  DROP TABLE IF EXISTS  ' + @TabName;
+execute sp_executesql @Select_SQL_Query;
 
-### 6.2 Specific Implementation Recommendations
+-- Later used for dynamic table creation
+set @Select_SQL_Query = N' \nselect * \ninto ' + @TabName + N' FROM...';
+```
 
-1. **Architectural Approach**
-   - Implement as a series of Fabric notebooks with clear separation of concerns
-   - Use notebook parameters for input values with proper validation
-   - Create a modular design with reusable components
-   - Implement comprehensive logging and error handling
-   - Design for scalability with configurable resource allocation
-   - Establish clear interfaces between components
-   - Create a metadata-driven approach for dynamic measure calculations
+**Fabric Solution:**
+```python
+# Use Spark temporary views instead of temp tables
+import uuid
 
-2. **Data Storage Strategy**
-   - Use Delta Lake tables for persistent storage with optimized partitioning
-   - Implement appropriate partitioning strategy based on query patterns
-   - Use temporary views for intermediate results with proper cleanup
-   - Cache frequently accessed DataFrames with appropriate storage levels
-   - Implement data lifecycle management policies
-   - Consider data compression options for large tables
-   - Optimize file sizes for distributed processing
+# Generate unique identifier for this session
+session_id = str(uuid.uuid4()).replace('-', '')[:10]
+temp_view_name = f"claim_transaction_measures_{session_id}"
 
-3. **Performance Optimization**
-   - Implement proper partitioning strategy based on query patterns
-   - Use Z-ordering for frequently queried columns
-   - Configure auto-optimize and auto-compaction for Delta tables
-   - Use broadcast joins for dimension tables to reduce shuffling
-   - Implement batch processing for large datasets with progress tracking
-   - Monitor and tune executor memory and cores configuration
-   - Implement data skew handling techniques
-   - Use appropriate caching strategies for frequently accessed data
+# Create temporary view
+spark.sql(f"""
+CREATE OR REPLACE TEMPORARY VIEW {temp_view_name} AS
+SELECT * FROM claim_transactions WHERE...
+""")
 
-4. **Error Handling and Monitoring**
-   - Implement comprehensive error logging with contextual information
-   - Create monitoring dashboards for execution metrics
-   - Set up alerts for failures and performance degradation
-   - Implement retry logic for transient failures
-   - Add detailed execution metrics collection
-   - Create self-healing mechanisms where possible
-   - Implement circuit breakers for dependent services
-   - Establish proper logging levels for different environments
+# For larger datasets, cache the DataFrame
+claim_df = spark.sql(f"SELECT * FROM {temp_view_name}")
+claim_df.cache()
 
-### 6.3 Timeline and Resource Estimation
+# Clean up when done
+spark.sql(f"DROP VIEW IF EXISTS {temp_view_name}")
+claim_df.unpersist()
+```
 
-| Phase | Duration | Resources | Deliverables |
-|-------|----------|-----------|-------------|
-| Architecture Design | 2-3 weeks | 1 Solution Architect, 1 Senior Developer | Architecture document, POC |
-| Core Implementation | 3-4 weeks | 2 Developers | Functional notebooks, Unit tests |
-| Performance Optimization | 2-3 weeks | 1 Developer, 1 Performance Engineer | Optimized implementation, Performance benchmarks |
-| Testing and Validation | 2-3 weeks | 1 Developer, 1 QA Engineer | Test results, Validation report, Regression test suite |
-| Deployment | 1-2 weeks | 1 Developer, 1 DevOps Engineer | Production implementation, Monitoring dashboards, Operational documentation |
-| **Total** | **10-15 weeks** | **2-3 Resources** | **Complete migration with documentation** |
+**Impact:** High - Requires fundamental restructuring of temporary data storage approach
 
-## 7. Conclusion
+#### 3.1.3 Dynamic SQL Generation and Execution
 
-The conversion of `uspSemanticClaimTransactionMeasuresData` from SQL Server to Microsoft Fabric represents a significant architectural transformation rather than a simple code migration. The fundamental differences between traditional T-SQL stored procedures and Fabric's Spark SQL-based environment necessitate a complete redesign of the solution while preserving the core business logic and functionality.
+**Issue**: Fabric has limited support for dynamic SQL execution
 
-Key transformation areas include:
+**SQL Server Implementation:**
+```sql
+-- Build dynamic SQL from multiple components
+set @Select_SQL_Query = N'  DROP TABLE IF EXISTS  ' + @TabName;
 
-1. **Architectural Shift**: From monolithic stored procedure to modular notebook design with clear separation of concerns
-2. **Data Processing Paradigm**: From row-based to distributed processing with optimized partitioning and caching strategies
-3. **Temporary Data Handling**: From global temp tables to temporary views and cached DataFrames with proper lifecycle management
-4. **Dynamic SQL**: From string concatenation to parameterized functions and metadata-driven approach
-5. **Performance Optimization**: From indexes to partitioning, Z-ordering, and distributed processing techniques
-6. **Error Handling**: From basic TRY/CATCH to comprehensive logging and monitoring with self-healing capabilities
+-- Dynamically build measure calculations from metadata
+select @Measure_SQL_Query
+    = (string_agg(convert(nvarchar(max), concat(Logic, ' AS ', Measure_Name)), ',')within group(order by Measure_Name asc))
+from Rules.SemanticLayerMetaData
+where SourceType = 'Claims';
 
-While the conversion presents significant challenges, it also offers substantial benefits:
+-- Combine components
+set @Full_SQL_Query = N' ' + @Select_SQL_Query + @Measure_SQL_Query + @From_SQL_Query;
 
-- **Improved Scalability**: Better handling of large datasets through distributed processing
-- **Enhanced Performance**: Potential for significant performance improvements with proper optimization
-- **Better Maintainability**: More modular design with clearer separation of concerns
-- **Advanced Monitoring**: Comprehensive logging and monitoring capabilities
-- **Future-Proofing**: Alignment with modern data processing architectures and practices
+-- Execute with parameters
+execute sp_executesql @Full_SQL_Query
+                    , N' @pJobStartDateTime DATETIME2,  @pJobEndDateTime DATETIME2'
+                    , @pJobStartDateTime = @pJobStartDateTime
+                    , @pJobEndDateTime = @pJobEndDateTime;
+```
 
-By following the recommended approach of phased implementation, comprehensive testing, and performance optimization, the migration can be completed successfully while maintaining functionality and potentially improving performance and scalability.
+**Fabric Solution:**
+```python
+# Python-based dynamic query construction
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import expr
 
-The estimated timeline of 10-15 weeks with 2-3 dedicated resources provides a realistic framework for planning and execution. Regular reviews and adjustments to the migration strategy may be necessary as implementation progresses, particularly during the early phases of architecture design and proof of concept.
+# Get measure definitions from metadata
+measure_df = spark.sql("""
+    SELECT Measure_Name, Logic 
+    FROM Rules.SemanticLayerMetaData 
+    WHERE SourceType = 'Claims'
+    ORDER BY Measure_Name
+""")
 
-This migration represents not just a technical conversion but an opportunity to modernize the data processing architecture and establish best practices for future development in the Microsoft Fabric environment.
+# Build select clause dynamically
+select_clause = "SELECT FactClaimTransactionLineWCKey, RevisionNumber"
+
+# Add measures dynamically
+measure_expressions = []
+for row in measure_df.collect():
+    measure_expressions.append(f"{row.Logic} AS {row.Measure_Name}")
+
+if measure_expressions:
+    select_clause += ", " + ", ".join(measure_expressions)
+
+# Build from clause
+from_clause = """
+FROM FactClaimTransactionLineWC
+INNER JOIN ClaimTransactionDescriptors 
+    ON FactClaimTransactionLineWC.ClaimTransactionWCKey = ClaimTransactionDescriptors.ClaimTransactionWCKey
+-- other joins
+"""
+
+# Build where clause
+where_clause = f"WHERE LoadUpdateDate >= '{start_date}' AND LoadUpdateDate <= '{end_date}'"
+
+# Execute final query
+final_query = f"{select_clause} {from_clause} {where_clause}"
+result_df = spark.sql(final_query)
+```
+
+**Impact:** High - Complex dynamic SQL generation requires complete redesign
+
+#### 3.1.4 Hash Value Generation for Change Detection
+
+**Issue**: Different hash functions available in Fabric
+
+**SQL Server Implementation:**
+```sql
+-- Hash generation for change detection
+CONVERT(NVARCHAR(512), HASHBYTES('SHA2_512', CONCAT_WS('~',FactClaimTransactionLineWCKey
+  ,RevisionNumber,PolicyWCKey,PolicyRiskStateWCKey,ClaimWCKey,ClaimTransactionLineCategoryKey,
+  -- many more fields concatenated
+  )), 1) AS HashValue
+```
+
+**Fabric Solution:**
+```python
+# Using Spark SQL hash functions
+from pyspark.sql.functions import sha2, concat_ws, col
+
+# Define columns to include in hash
+hash_columns = [
+    "FactClaimTransactionLineWCKey", "RevisionNumber", "PolicyWCKey", 
+    "PolicyRiskStateWCKey", "ClaimWCKey", "ClaimTransactionLineCategoryKey",
+    # Add all other required columns
+]
+
+# Create column references
+col_refs = [col(c) for c in hash_columns]
+
+# Generate hash value
+df = df.withColumn("HashValue", 
+                  sha2(concat_ws("~", *col_refs), 512))
+```
+
+**Impact:** Medium - Hash generation requires function replacement but concept remains similar
+
+### 3.2 Medium Priority Issues
+
+#### 3.2.1 Data Type Mapping
+
+**Issue**: SQL Server data types need mapping to Fabric equivalents
+
+**SQL Server Types and Fabric Equivalents:**
+
+| SQL Server Type | Fabric Equivalent | Notes |
+|----------------|-------------------|-------|
+| `DATETIME2` | `TIMESTAMP` | Compatible with minor syntax changes |
+| `VARCHAR(MAX)` | `STRING` | No length limitation in Fabric |
+| `DECIMAL(18,2)` | `DECIMAL(38,18)` | Higher precision in Fabric by default |
+| `BIT` | `BOOLEAN` | Direct mapping |
+| `VARBINARY(MAX)` | `BINARY` | Compatible with minor syntax changes |
+| `NVARCHAR` | `STRING` | No Unicode distinction in Fabric |
+| `INT` | `INT` or `LONG` | Direct mapping |
+| `BIGINT` | `LONG` | Direct mapping |
+
+**Impact:** Medium - Data type conversion required throughout codebase
+
+#### 3.2.2 Date Handling (1900 to 1700 Conversion)
+
+**Issue**: Different minimum date values
+
+**SQL Server Implementation:**
+```sql
+if @pJobStartDateTime = '01/01/1900'
+begin
+    set @pJobStartDateTime = '01/01/1700';
+end;
+```
+
+**Fabric Solution:**
+```python
+# Python implementation
+from datetime import datetime
+import pandas as pd
+
+# Convert string to datetime if needed
+if isinstance(pJobStartDateTime, str):
+    pJobStartDateTime = pd.to_datetime(pJobStartDateTime)
+
+min_date_sql = pd.to_datetime("1900-01-01")
+min_date_fabric = pd.to_datetime("1700-01-01")
+
+if pJobStartDateTime == min_date_sql:
+    pJobStartDateTime = min_date_fabric
+```
+
+**Impact:** Low - Simple value replacement
+
+#### 3.2.3 Index Handling
+
+**Issue**: Fabric uses different optimization techniques than SQL Server indexes
+
+**SQL Server Implementation:**
+```sql
+if exists
+(
+    select *
+    from sys.indexes
+    where object_id = object_id(N'Semantic.ClaimTransactionMeasures')
+          and name = N'IXSemanticClaimTransactionMeasuresAgencyKey'
+)
+begin
+    alter index IXSemanticClaimTransactionMeasuresAgencyKey
+    on Semantic.ClaimTransactionMeasures
+    disable;
+end;
+```
+
+**Fabric Solution:**
+```python
+# Delta Lake optimization techniques
+
+# Check if table exists and is a Delta table
+table_exists = spark.catalog.tableExists("Semantic.ClaimTransactionMeasures")
+
+if table_exists:
+    # Get table format
+    table_format = spark.sql("DESCRIBE DETAIL Semantic.ClaimTransactionMeasures") \
+                       .select("format").collect()[0][0]
+    
+    if table_format.lower() == "delta":
+        # Optimize the table
+        spark.sql("""
+        OPTIMIZE Semantic.ClaimTransactionMeasures
+        ZORDER BY (AgencyKey, ClaimTransactionWCKey)
+        """)
+        
+        # Configure auto-optimize
+        spark.sql("""
+        ALTER TABLE Semantic.ClaimTransactionMeasures
+        SET TBLPROPERTIES (
+            'delta.autoOptimize.optimizeWrite' = 'true', 
+            'delta.autoOptimize.autoCompact' = 'true'
+        )
+        """)
+```
+
+**Impact:** Medium - Complete redesign of optimization strategy required
+
+### 3.3 Low Priority Issues
+
+#### 3.3.1 System Table References
+
+**Issue**: Different system tables and views in Fabric
+
+**SQL Server Implementation:**
+```sql
+select max(t3.[rowcnt]) TableReferenceRowCount
+from sys.tables t2
+    inner join sys.sysindexes t3
+        on t2.object_id = t3.id
+where t2.[name] = 'ClaimTransactionMeasures'
+      and schema_name(t2.[schema_id]) in ( 'semantic' )
+```
+
+**Fabric Solution:**
+```python
+# Use Spark catalog functions
+def get_table_row_count(schema_name, table_name):
+    try:
+        # Check if table exists
+        if spark.catalog.tableExists(f"{schema_name}.{table_name}"):
+            # Get table statistics
+            table_stats = spark.sql(f"DESCRIBE DETAIL {schema_name}.{table_name}")
+            
+            # Extract row count
+            if "numRows" in table_stats.columns:
+                row_count = table_stats.select("numRows").collect()[0][0]
+                return row_count if row_count is not None else 0
+            else:
+                # If stats not available, count rows directly (expensive)
+                return spark.table(f"{schema_name}.{table_name}").count()
+        else:
+            return 0
+    except Exception as e:
+        print(f"Error getting row count: {str(e)}")
+        return 0
+
+# Usage
+table_reference_row_count = get_table_row_count("semantic", "ClaimTransactionMeasures")
+```
+
+**Impact:** Low - Different metadata access methods required
+
+#### 3.3.2 Error Handling
+
+**Issue**: Different error handling mechanisms
+
+**SQL Server Implementation:**
+```sql
+-- Limited error handling in original procedure
+BEGIN TRY
+    -- Processing logic
+END TRY
+BEGIN CATCH
+    -- Error handling
+END CATCH
+```
+
+**Fabric Solution:**
+```python
+# Comprehensive error handling and logging
+import logging
+from datetime import datetime
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("ClaimProcessing")
+
+try:
+    # Start timing
+    start_time = datetime.now()
+    logger.info(f"Starting claim processing with parameters: {start_date} to {end_date}")
+    
+    # Processing logic
+    result_df = spark.sql(query)
+    row_count = result_df.count()
+    
+    # Log success
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+    logger.info(f"Processing completed successfully. Rows processed: {row_count}, Duration: {duration} seconds")
+    
+except Exception as e:
+    # Log error details
+    logger.error(f"Processing failed: {str(e)}")
+    
+    # Write to error table
+    error_df = spark.createDataFrame([(datetime.now(), "uspSemanticClaimTransactionMeasuresData", str(e))], 
+                                   ["ErrorTime", "ProcedureName", "ErrorMessage"])
+    error_df.write.format("delta").mode("append").saveAsTable("logs.ErrorLog")
+    
+    # Re-raise for notebook failure handling
+    raise
+```
+
+**Impact:** Medium - Complete redesign of error handling approach
