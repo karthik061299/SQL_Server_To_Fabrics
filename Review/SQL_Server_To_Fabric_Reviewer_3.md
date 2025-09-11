@@ -283,3 +283,153 @@ if pJobStartDateTime == min_date_sql:
 ```
 
 **Impact:** Low - Simple value replacement
+
+#### 3.2.3 Index Handling
+
+**Issue**: Fabric uses different optimization techniques than SQL Server indexes
+
+**SQL Server Implementation:**
+```sql
+if exists
+(
+    select *
+    from sys.indexes
+    where object_id = object_id(N'Semantic.ClaimTransactionMeasures')
+          and name = N'IXSemanticClaimTransactionMeasuresAgencyKey'
+)
+begin
+    alter index IXSemanticClaimTransactionMeasuresAgencyKey
+    on Semantic.ClaimTransactionMeasures
+    disable;
+end;
+```
+
+**Fabric Solution:**
+```python
+# Delta Lake optimization techniques
+
+# Check if table exists and is a Delta table
+table_exists = spark.catalog.tableExists("Semantic.ClaimTransactionMeasures")
+
+if table_exists:
+    # Get table format
+    table_format = spark.sql("DESCRIBE DETAIL Semantic.ClaimTransactionMeasures") \
+                       .select("format").collect()[0][0]
+    
+    if table_format.lower() == "delta":
+        # Optimize the table
+        spark.sql("""
+        OPTIMIZE Semantic.ClaimTransactionMeasures
+        ZORDER BY (AgencyKey, ClaimTransactionWCKey)
+        """)
+        
+        # Configure auto-optimize
+        spark.sql("""
+        ALTER TABLE Semantic.ClaimTransactionMeasures
+        SET TBLPROPERTIES (
+            'delta.autoOptimize.optimizeWrite' = 'true', 
+            'delta.autoOptimize.autoCompact' = 'true'
+        )
+        """)
+```
+
+**Impact:** Medium - Complete redesign of optimization strategy required
+
+### 3.3 Low Priority Issues
+
+#### 3.3.1 System Table References
+
+**Issue**: Different system tables and views in Fabric
+
+**SQL Server Implementation:**
+```sql
+select max(t3.[rowcnt]) TableReferenceRowCount
+from sys.tables t2
+    inner join sys.sysindexes t3
+        on t2.object_id = t3.id
+where t2.[name] = 'ClaimTransactionMeasures'
+      and schema_name(t2.[schema_id]) in ( 'semantic' )
+```
+
+**Fabric Solution:**
+```python
+# Use Spark catalog functions
+def get_table_row_count(schema_name, table_name):
+    try:
+        # Check if table exists
+        if spark.catalog.tableExists(f"{schema_name}.{table_name}"):
+            # Get table statistics
+            table_stats = spark.sql(f"DESCRIBE DETAIL {schema_name}.{table_name}")
+            
+            # Extract row count
+            if "numRows" in table_stats.columns:
+                row_count = table_stats.select("numRows").collect()[0][0]
+                return row_count if row_count is not None else 0
+            else:
+                # If stats not available, count rows directly (expensive)
+                return spark.table(f"{schema_name}.{table_name}").count()
+        else:
+            return 0
+    except Exception as e:
+        print(f"Error getting row count: {str(e)}")
+        return 0
+
+# Usage
+table_reference_row_count = get_table_row_count("semantic", "ClaimTransactionMeasures")
+```
+
+**Impact:** Low - Different metadata access methods required
+
+#### 3.3.2 Error Handling
+
+**Issue**: Different error handling mechanisms
+
+**SQL Server Implementation:**
+```sql
+-- Limited error handling in original procedure
+BEGIN TRY
+    -- Processing logic
+END TRY
+BEGIN CATCH
+    -- Error handling
+END CATCH
+```
+
+**Fabric Solution:**
+```python
+# Comprehensive error handling and logging
+import logging
+from datetime import datetime
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("ClaimProcessing")
+
+try:
+    # Start timing
+    start_time = datetime.now()
+    logger.info(f"Starting claim processing with parameters: {start_date} to {end_date}")
+    
+    # Processing logic
+    result_df = spark.sql(query)
+    row_count = result_df.count()
+    
+    # Log success
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+    logger.info(f"Processing completed successfully. Rows processed: {row_count}, Duration: {duration} seconds")
+    
+except Exception as e:
+    # Log error details
+    logger.error(f"Processing failed: {str(e)}")
+    
+    # Write to error table
+    error_df = spark.createDataFrame([(datetime.now(), "uspSemanticClaimTransactionMeasuresData", str(e))], 
+                                   ["ErrorTime", "ProcedureName", "ErrorMessage"])
+    error_df.write.format("delta").mode("append").saveAsTable("logs.ErrorLog")
+    
+    # Re-raise for notebook failure handling
+    raise
+```
+
+**Impact:** Medium - Complete redesign of error handling approach
