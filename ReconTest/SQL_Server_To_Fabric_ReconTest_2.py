@@ -1,482 +1,358 @@
 _____________________________________________
 ## *Author*: AAVA
 ## *Created on*:   
-## *Description*:   Comprehensive reconciliation test for SQL Server to Fabric migration of uspSemanticClaimTransactionMeasuresData
+## *Description*:   SQL Server to Fabric reconciliation test for uspSemanticClaimTransactionMeasuresData stored procedure with enhanced features
 ## *Version*: 2 
 ## *Updated on*: 
 _____________________________________________
 
-#!/usr/bin/env python3
-"""
-SQL Server to Fabric Reconciliation Test Suite
-
-This module provides a comprehensive framework for validating the migration of SQL Server
-stored procedures to Microsoft Fabric, specifically focusing on the
-'uspSemanticClaimTransactionMeasuresData' procedure.
-
-The test suite handles the end-to-end process of:
-1. Executing SQL Server code
-2. Transferring results to Microsoft Fabric
-3. Running equivalent Fabric code
-4. Validating that results match between platforms
-
-Version 2 Enhancements:
-- Improved error handling with detailed error messages
-- Enhanced data comparison with column-level validation
-- Added support for large dataset testing with batching
-- Implemented parallel processing for performance optimization
-- Added detailed reporting with mismatch analysis
-- Enhanced security with Azure Key Vault integration
-- Added support for parameterized testing
-"""
-
-import pyodbc
 import pandas as pd
+import pyodbc
 import numpy as np
-import os
-import json
 import logging
+import json
 import time
 import hashlib
-import uuid
+import os
 import sys
-import traceback
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple, Optional, Any, Union, Set
-from dataclasses import dataclass, field
+from typing import Dict, List, Tuple, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from azure.identity import DefaultAzureCredential, ClientSecretCredential
-from azure.storage.blob import BlobServiceClient, ContainerClient, BlobClient
+from dataclasses import dataclass
+from pathlib import Path
+import gc
+import psutil
 from azure.keyvault.secrets import SecretClient
-import pyarrow as pa
-import pyarrow.parquet as pq
+from azure.identity import DefaultAzureCredential
+from scipy import stats
 import warnings
 warnings.filterwarnings('ignore')
 
-# Configure logging with more detailed format
-log_file = f"recon_test_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_file),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
-
 @dataclass
-class ConnectionConfig:
-    """Configuration class for database connections and Azure services"""
-    # SQL Server configuration
-    sql_server: str
-    sql_database: str
-    sql_username: Optional[str] = None
-    sql_password: Optional[str] = None
-    sql_auth_type: str = "windows"  # "windows" or "sql"
+class ReconConfig:
+    """Configuration class for reconciliation test"""
+    chunk_size: int = 10000
+    max_workers: int = 4
+    retry_attempts: int = 3
+    retry_delay: float = 1.0
+    memory_threshold: float = 0.8
+    tolerance: float = 0.01
+    enable_parallel: bool = True
+    enable_statistics: bool = True
+    log_level: str = "INFO"
+    output_dir: str = "recon_reports"
+    key_vault_url: str = ""
     
-    # Fabric configuration
-    fabric_endpoint: str
-    fabric_database: str
+class EnhancedLogger:
+    """Enhanced logging with multiple handlers and detailed formatting"""
     
-    # Azure Storage configuration
-    azure_storage_account: str
-    azure_container: str
-    
-    # Azure Authentication
-    key_vault_url: Optional[str] = None
-    tenant_id: Optional[str] = None
-    client_id: Optional[str] = None
-    client_secret: Optional[str] = None
-    
-    # Test configuration
-    batch_size: int = 100000
-    timeout_seconds: int = 3600
-    parallel_threads: int = 4
-    comparison_tolerance: float = 0.0001
-
-@dataclass
-class ColumnComparisonResult:
-    """Class to store column-level comparison results"""
-    column_name: str
-    match_count: int
-    mismatch_count: int
-    null_mismatch_count: int
-    type_mismatch_count: int
-    precision_mismatch_count: int
-    match_percentage: float
-    sample_mismatches: List[Dict] = field(default_factory=list)
-
-@dataclass
-class ReconciliationResult:
-    """Class to store comprehensive reconciliation results"""
-    test_name: str
-    sql_server_count: int
-    fabric_count: int
-    matches: int
-    mismatches: int
-    match_percentage: float
-    execution_time: float
-    status: str
-    sql_server_query_time: float = 0.0
-    fabric_query_time: float = 0.0
-    transfer_time: float = 0.0
-    column_results: List[ColumnComparisonResult] = field(default_factory=list)
-    error_details: Optional[str] = None
-    sample_mismatches: List[Dict] = field(default_factory=list)
-
-class SQLServerToFabricReconTest:
-    """Main class for SQL Server to Fabric reconciliation testing"""
-    
-    def __init__(self, config: ConnectionConfig):
-        """Initialize the reconciliation test framework
+    def __init__(self, name: str, log_level: str = "INFO", output_dir: str = "logs"):
+        self.logger = logging.getLogger(name)
+        self.logger.setLevel(getattr(logging, log_level.upper()))
         
-        Args:
-            config: Configuration object with connection details
-        """
-        self.config = config
-        self.credential = None
-        self.blob_service_client = None
-        self.container_client = None
-        self.sql_connection = None
-        self.fabric_connection = None
-        self.test_results = []
-        self.test_id = str(uuid.uuid4())[:8]
-        self.temp_resources = []
+        # Clear existing handlers
+        self.logger.handlers.clear()
         
-        # Initialize Azure services
-        self._initialize_azure_services()
+        # Create output directory
+        Path(output_dir).mkdir(exist_ok=True)
+        
+        # Detailed formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        
+        # Console handler
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        self.logger.addHandler(console_handler)
+        
+        # File handler
+        file_handler = logging.FileHandler(
+            Path(output_dir) / f"{name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        )
+        file_handler.setFormatter(formatter)
+        self.logger.addHandler(file_handler)
+        
+        # Error file handler
+        error_handler = logging.FileHandler(
+            Path(output_dir) / f"{name}_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        )
+        error_handler.setLevel(logging.ERROR)
+        error_handler.setFormatter(formatter)
+        self.logger.addHandler(error_handler)
     
-    def _initialize_azure_services(self) -> None:
-        """Initialize Azure services and authentication"""
+    def info(self, message: str):
+        self.logger.info(message)
+    
+    def error(self, message: str):
+        self.logger.error(message)
+    
+    def warning(self, message: str):
+        self.logger.warning(message)
+    
+    def debug(self, message: str):
+        self.logger.debug(message)
+
+class AzureKeyVaultManager:
+    """Secure credential management using Azure Key Vault"""
+    
+    def __init__(self, vault_url: str):
+        self.vault_url = vault_url
+        self.credential = DefaultAzureCredential()
+        self.client = SecretClient(vault_url=vault_url, credential=self.credential)
+        
+    def get_secret(self, secret_name: str) -> str:
+        """Retrieve secret from Azure Key Vault"""
         try:
-            logger.info("Initializing Azure services...")
-            
-            # Initialize Azure credential
-            if self.config.client_id and self.config.client_secret and self.config.tenant_id:
-                logger.info("Using service principal authentication")
-                self.credential = ClientSecretCredential(
-                    tenant_id=self.config.tenant_id,
-                    client_id=self.config.client_id,
-                    client_secret=self.config.client_secret
-                )
-            else:
-                logger.info("Using default Azure credential")
-                self.credential = DefaultAzureCredential()
-            
-            # Initialize Blob Service Client
-            storage_url = f"https://{self.config.azure_storage_account}.blob.core.windows.net"
-            self.blob_service_client = BlobServiceClient(
-                account_url=storage_url,
-                credential=self.credential
-            )
-            
-            # Get container client
-            self.container_client = self.blob_service_client.get_container_client(
-                self.config.azure_container
-            )
-            
-            # Verify container exists or create it
-            try:
-                self.container_client.get_container_properties()
-            except Exception:
-                logger.info(f"Container {self.config.azure_container} does not exist, creating it...")
-                self.container_client = self.blob_service_client.create_container(
-                    self.config.azure_container
-                )
-            
-            logger.info("Azure services initialized successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize Azure services: {str(e)}")
-            logger.error(traceback.format_exc())
-            raise
-    
-    def _get_secret_from_keyvault(self, secret_name: str) -> str:
-        """Retrieve secret from Azure Key Vault
-        
-        Args:
-            secret_name: Name of the secret to retrieve
-            
-        Returns:
-            Secret value as string
-        """
-        try:
-            if not self.config.key_vault_url:
-                raise ValueError("Key Vault URL not provided in configuration")
-                
-            secret_client = SecretClient(
-                vault_url=self.config.key_vault_url,
-                credential=self.credential
-            )
-            secret = secret_client.get_secret(secret_name)
+            secret = self.client.get_secret(secret_name)
             return secret.value
         except Exception as e:
-            logger.error(f"Failed to retrieve secret {secret_name}: {str(e)}")
-            raise
+            raise Exception(f"Failed to retrieve secret '{secret_name}': {str(e)}")
+
+class PerformanceMonitor:
+    """Performance monitoring and metrics collection"""
     
-    def _connect_sql_server(self) -> pyodbc.Connection:
-        """Establish connection to SQL Server
+    def __init__(self, logger):
+        self.logger = logger
+        self.metrics = {}
+        self.start_time = None
         
-        Returns:
-            Active SQL Server connection
-        """
-        try:
-            logger.info(f"Connecting to SQL Server: {self.config.sql_server}")
+    def start_monitoring(self, operation: str):
+        """Start monitoring an operation"""
+        self.start_time = time.time()
+        self.metrics[operation] = {
+            'start_time': self.start_time,
+            'start_memory': psutil.virtual_memory().percent,
+            'start_cpu': psutil.cpu_percent()
+        }
+        
+    def end_monitoring(self, operation: str):
+        """End monitoring and record metrics"""
+        if operation in self.metrics:
+            end_time = time.time()
+            self.metrics[operation].update({
+                'end_time': end_time,
+                'duration': end_time - self.metrics[operation]['start_time'],
+                'end_memory': psutil.virtual_memory().percent,
+                'end_cpu': psutil.cpu_percent(),
+                'memory_delta': psutil.virtual_memory().percent - self.metrics[operation]['start_memory']
+            })
             
-            # Build connection string based on authentication type
-            if self.config.sql_auth_type.lower() == "windows":
-                connection_string = (
-                    f"DRIVER={{ODBC Driver 17 for SQL Server}};" 
-                    f"SERVER={self.config.sql_server};" 
-                    f"DATABASE={self.config.sql_database};" 
-                    f"Trusted_Connection=yes;" 
-                    f"Connection Timeout=30;" 
-                    f"Command Timeout={self.config.timeout_seconds};"
-                )
-            else:
-                # SQL authentication
-                username = self.config.sql_username
-                password = self.config.sql_password
+            self.logger.info(f"Operation '{operation}' completed in {self.metrics[operation]['duration']:.2f}s")
+            self.logger.info(f"Memory usage: {self.metrics[operation]['memory_delta']:+.2f}%")
+    
+    def get_metrics(self) -> Dict:
+        """Get all collected metrics"""
+        return self.metrics
+
+class DataQualityValidator:
+    """Comprehensive data quality validation"""
+    
+    def __init__(self, logger):
+        self.logger = logger
+        self.quality_issues = []
+    
+    def validate_dataframe(self, df: pd.DataFrame, source: str) -> Dict[str, Any]:
+        """Perform comprehensive data quality checks"""
+        self.logger.info(f"Starting data quality validation for {source}")
+        
+        validation_results = {
+            'source': source,
+            'total_rows': len(df),
+            'total_columns': len(df.columns),
+            'null_counts': {},
+            'duplicate_rows': 0,
+            'data_types': {},
+            'outliers': {},
+            'business_rules': {}
+        }
+        
+        # Null value analysis
+        for col in df.columns:
+            null_count = df[col].isnull().sum()
+            null_percentage = (null_count / len(df)) * 100
+            validation_results['null_counts'][col] = {
+                'count': int(null_count),
+                'percentage': round(null_percentage, 2)
+            }
+            
+            if null_percentage > 50:
+                self.quality_issues.append(f"{source}: Column '{col}' has {null_percentage:.2f}% null values")
+        
+        # Duplicate analysis
+        duplicate_count = df.duplicated().sum()
+        validation_results['duplicate_rows'] = int(duplicate_count)
+        
+        if duplicate_count > 0:
+            self.quality_issues.append(f"{source}: Found {duplicate_count} duplicate rows")
+        
+        # Data type analysis
+        for col in df.columns:
+            validation_results['data_types'][col] = str(df[col].dtype)
+        
+        # Outlier detection for numeric columns
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        for col in numeric_cols:
+            if not df[col].empty:
+                Q1 = df[col].quantile(0.25)
+                Q3 = df[col].quantile(0.75)
+                IQR = Q3 - Q1
+                lower_bound = Q1 - 1.5 * IQR
+                upper_bound = Q3 + 1.5 * IQR
+                outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
                 
-                # Try to get credentials from Key Vault if not provided
-                if (not username or not password) and self.config.key_vault_url:
-                    username = self._get_secret_from_keyvault("sql-username")
-                    password = self._get_secret_from_keyvault("sql-password")
-                
-                if not username or not password:
-                    raise ValueError("SQL authentication requires username and password")
+                validation_results['outliers'][col] = {
+                    'count': len(outliers),
+                    'percentage': round((len(outliers) / len(df)) * 100, 2)
+                }
+        
+        # Business rule validation
+        validation_results['business_rules'] = self._validate_business_rules(df, source)
+        
+        self.logger.info(f"Data quality validation completed for {source}")
+        return validation_results
+    
+    def _validate_business_rules(self, df: pd.DataFrame, source: str) -> Dict[str, Any]:
+        """Validate business-specific rules"""
+        rules_results = {}
+        
+        # Example business rules - customize based on your data
+        if 'Amount' in df.columns:
+            negative_amounts = (df['Amount'] < 0).sum()
+            rules_results['negative_amounts'] = {
+                'count': int(negative_amounts),
+                'percentage': round((negative_amounts / len(df)) * 100, 2)
+            }
+        
+        if 'Date' in df.columns:
+            try:
+                df['Date'] = pd.to_datetime(df['Date'])
+                future_dates = (df['Date'] > datetime.now()).sum()
+                rules_results['future_dates'] = {
+                    'count': int(future_dates),
+                    'percentage': round((future_dates / len(df)) * 100, 2)
+                }
+            except:
+                rules_results['date_conversion_error'] = True
+        
+        return rules_results
+    
+    def get_quality_issues(self) -> List[str]:
+        """Get all identified quality issues"""
+        return self.quality_issues
+
+class StatisticalAnalyzer:
+    """Advanced statistical analysis for data comparison"""
+    
+    def __init__(self, logger):
+        self.logger = logger
+    
+    def compare_distributions(self, df1: pd.DataFrame, df2: pd.DataFrame, 
+                            numeric_columns: List[str]) -> Dict[str, Any]:
+        """Compare statistical distributions between datasets"""
+        self.logger.info("Starting statistical distribution comparison")
+        
+        comparison_results = {}
+        
+        for col in numeric_columns:
+            if col in df1.columns and col in df2.columns:
+                try:
+                    # Remove null values
+                    data1 = df1[col].dropna()
+                    data2 = df2[col].dropna()
                     
-                connection_string = (
-                    f"DRIVER={{ODBC Driver 17 for SQL Server}};" 
-                    f"SERVER={self.config.sql_server};" 
-                    f"DATABASE={self.config.sql_database};" 
-                    f"UID={username};" 
-                    f"PWD={password};" 
-                    f"Connection Timeout=30;" 
-                    f"Command Timeout={self.config.timeout_seconds};"
-                )
-            
-            # Establish connection
-            connection = pyodbc.connect(connection_string)
-            connection.autocommit = True
-            logger.info("SQL Server connection established successfully")
-            return connection
-            
-        except Exception as e:
-            logger.error(f"Failed to connect to SQL Server: {str(e)}")
-            logger.error(traceback.format_exc())
-            raise
-    
-    def _connect_fabric(self) -> pyodbc.Connection:
-        """Establish connection to Microsoft Fabric
+                    if len(data1) > 0 and len(data2) > 0:
+                        # Kolmogorov-Smirnov test
+                        ks_stat, ks_pvalue = stats.ks_2samp(data1, data2)
+                        
+                        # Mann-Whitney U test
+                        mw_stat, mw_pvalue = stats.mannwhitneyu(data1, data2, alternative='two-sided')
+                        
+                        # Descriptive statistics
+                        desc_stats = {
+                            'source1': {
+                                'mean': float(data1.mean()),
+                                'median': float(data1.median()),
+                                'std': float(data1.std()),
+                                'min': float(data1.min()),
+                                'max': float(data1.max())
+                            },
+                            'source2': {
+                                'mean': float(data2.mean()),
+                                'median': float(data2.median()),
+                                'std': float(data2.std()),
+                                'min': float(data2.min()),
+                                'max': float(data2.max())
+                            }
+                        }
+                        
+                        comparison_results[col] = {
+                            'ks_test': {'statistic': float(ks_stat), 'p_value': float(ks_pvalue)},
+                            'mannwhitney_test': {'statistic': float(mw_stat), 'p_value': float(mw_pvalue)},
+                            'descriptive_stats': desc_stats,
+                            'distributions_similar': ks_pvalue > 0.05 and mw_pvalue > 0.05
+                        }
+                        
+                except Exception as e:
+                    self.logger.error(f"Statistical comparison failed for column {col}: {str(e)}")
+                    comparison_results[col] = {'error': str(e)}
         
-        Returns:
-            Active Fabric connection
-        """
-        try:
-            logger.info(f"Connecting to Microsoft Fabric: {self.config.fabric_endpoint}")
-            
-            # Fabric connection using Azure AD authentication
-            connection_string = (
-                f"DRIVER={{ODBC Driver 17 for SQL Server}};" 
-                f"SERVER={self.config.fabric_endpoint};" 
-                f"DATABASE={self.config.fabric_database};" 
-                f"Authentication=ActiveDirectoryIntegrated;" 
-                f"Connection Timeout=30;" 
-                f"Command Timeout={self.config.timeout_seconds};"
-            )
-            
-            connection = pyodbc.connect(connection_string)
-            connection.autocommit = True
-            logger.info("Fabric connection established successfully")
-            return connection
-            
-        except Exception as e:
-            logger.error(f"Failed to connect to Fabric: {str(e)}")
-            logger.error(traceback.format_exc())
-            raise
+        return comparison_results
+
+class EnhancedSQLServerToFabricRecon:
+    """Enhanced SQL Server to Fabric reconciliation with advanced features"""
     
-    def _execute_sql_server_procedure(self, parameters: Dict = None) -> Tuple[pd.DataFrame, float]:
-        """Execute the SQL Server stored procedure
+    def __init__(self, config_path: Optional[str] = None):
+        # Load configuration
+        self.config = self._load_config(config_path)
         
-        Args:
-            parameters: Dictionary of parameters to pass to the stored procedure
-            
-        Returns:
-            Tuple containing the result DataFrame and execution time in seconds
-        """
-        try:
-            if not self.sql_connection:
-                self.sql_connection = self._connect_sql_server()
-            
-            # Execute uspSemanticClaimTransactionMeasuresData stored procedure
-            cursor = self.sql_connection.cursor()
-            start_time = time.time()
-            
-            # Prepare and execute the stored procedure
-            if parameters:
-                param_string = ', '.join([f"@{k}=?" for k in parameters.keys()])
-                sql_query = f"EXEC [Semantic].[uspSemanticClaimTransactionMeasuresData] {param_string}"
-                logger.info(f"Executing SQL Server procedure with parameters: {parameters}")
-                cursor.execute(sql_query, list(parameters.values()))
-            else:
-                logger.info("Executing SQL Server procedure without parameters")
-                cursor.execute("EXEC [Semantic].[uspSemanticClaimTransactionMeasuresData] @pJobStartDateTime = '01/01/2023', @pJobEndDateTime = '12/31/2023'")
-            
-            # Fetch results
-            columns = [column[0] for column in cursor.description]
-            data = []
-            
-            # Fetch in batches to handle large result sets
-            batch = cursor.fetchmany(self.config.batch_size)
-            while batch:
-                data.extend(batch)
-                batch = cursor.fetchmany(self.config.batch_size)
-            
-            execution_time = time.time() - start_time
-            
-            # Convert to DataFrame
-            df = pd.DataFrame.from_records(data, columns=columns)
-            logger.info(f"SQL Server procedure executed successfully in {execution_time:.2f}s. Rows returned: {len(df)}")
-            
-            return df, execution_time
-            
-        except Exception as e:
-            logger.error(f"Failed to execute SQL Server procedure: {str(e)}")
-            logger.error(traceback.format_exc())
-            raise
-    
-    def _upload_to_blob_storage(self, df: pd.DataFrame, blob_name: str) -> Tuple[str, float]:
-        """Upload DataFrame to Azure Blob Storage as Parquet
+        # Initialize components
+        self.logger = EnhancedLogger("ReconTest_v2", self.config.log_level)
+        self.performance_monitor = PerformanceMonitor(self.logger)
+        self.data_quality_validator = DataQualityValidator(self.logger)
+        self.statistical_analyzer = StatisticalAnalyzer(self.logger)
         
-        Args:
-            df: DataFrame to upload
-            blob_name: Name for the blob in storage
-            
-        Returns:
-            Tuple containing the blob URL and upload time in seconds
-        """
-        try:
-            logger.info(f"Uploading data to blob storage as {blob_name}")
-            start_time = time.time()
-            
-            # Handle large DataFrames by using PyArrow directly
-            table = pa.Table.from_pandas(df)
-            
-            # Create a buffer to hold the Parquet data
-            buffer = pa.BufferOutputStream()
-            pq.write_table(table, buffer)
-            parquet_bytes = buffer.getvalue().to_pybytes()
-            
-            # Upload to blob storage
-            blob_client = self.container_client.get_blob_client(blob_name)
-            blob_client.upload_blob(parquet_bytes, overwrite=True)
-            
-            # Track for cleanup
-            self.temp_resources.append(("blob", blob_name))
-            
-            upload_time = time.time() - start_time
-            blob_url = f"https://{self.config.azure_storage_account}.blob.core.windows.net/{self.config.azure_container}/{blob_name}"
-            logger.info(f"Data uploaded to blob storage in {upload_time:.2f}s: {blob_url}")
-            
-            return blob_url, upload_time
-            
-        except Exception as e:
-            logger.error(f"Failed to upload to blob storage: {str(e)}")
-            logger.error(traceback.format_exc())
-            raise
-    
-    def _create_fabric_external_table(self, blob_url: str, table_name: str, df_schema: pd.DataFrame) -> None:
-        """Create external table in Fabric pointing to blob storage
-        
-        Args:
-            blob_url: URL to the blob containing the data
-            table_name: Name for the external table
-            df_schema: DataFrame to use for schema definition
-        """
-        try:
-            logger.info(f"Creating external table {table_name} in Fabric")
-            
-            if not self.fabric_connection:
-                self.fabric_connection = self._connect_fabric()
-            
-            cursor = self.fabric_connection.cursor()
-            
-            # Track for cleanup
-            self.temp_resources.append(("table", table_name))
-            
-            # Drop table if exists
-            drop_sql = f"DROP TABLE IF EXISTS {table_name}"
-            cursor.execute(drop_sql)
-            
-            # Generate column definitions based on DataFrame schema
-            column_defs = []
-            for col, dtype in df_schema.dtypes.items():
-                # Map pandas dtypes to SQL types
-                if pd.api.types.is_integer_dtype(dtype):
-                    sql_type = "BIGINT"
-                elif pd.api.types.is_float_dtype(dtype):
-                    sql_type = "FLOAT"
-                elif pd.api.types.is_datetime64_any_dtype(dtype):
-                    sql_type = "DATETIME2"
-                elif pd.api.types.is_bool_dtype(dtype):
-                    sql_type = "BIT"
-                elif pd.api.types.is_object_dtype(dtype) or pd.api.types.is_string_dtype(dtype):
-                    sql_type = "STRING"
-                else:
-                    sql_type = "STRING"
-                column_defs.append(f"[{col}] {sql_type}")
-            
-            columns_sql = ",\n    ".join(column_defs)
-            
-            # Create external data source if it doesn't exist
+        # Initialize Key Vault if configured
+        self.key_vault = None
+        if hasattr(self.config, 'key_vault_url') and self.config.key_vault_url:
             try:
-                cursor.execute("SELECT 1 FROM sys.external_data_sources WHERE name = 'ExternalDataSource'")
-                if not cursor.fetchone():
-                    create_data_source_sql = f"""
-                    CREATE EXTERNAL DATA SOURCE ExternalDataSource 
-                    WITH (
-                        LOCATION = 'https://{self.config.azure_storage_account}.blob.core.windows.net/{self.config.azure_container}'
-                    )
-                    """
-                    cursor.execute(create_data_source_sql)
+                self.key_vault = AzureKeyVaultManager(self.config.key_vault_url)
+                self.logger.info("Azure Key Vault initialized successfully")
             except Exception as e:
-                logger.warning(f"Error checking/creating external data source: {str(e)}")
-            
-            # Create file format if it doesn't exist
+                self.logger.error(f"Failed to initialize Key Vault: {str(e)}")
+        
+        # Results storage
+        self.results = {
+            'execution_id': self._generate_execution_id(),
+            'start_time': datetime.now(),
+            'config': self.config.__dict__,
+            'data_quality': {},
+            'comparison_results': {},
+            'statistical_analysis': {},
+            'performance_metrics': {},
+            'recommendations': []
+        }
+        
+        # Create output directory
+        Path(self.config.output_dir).mkdir(exist_ok=True)
+        
+        self.logger.info(f"Enhanced ReconTest v2 initialized with execution ID: {self.results['execution_id']}")
+    
+    def _load_config(self, config_path: Optional[str]) -> ReconConfig:
+        """Load configuration from file or use defaults"""
+        if config_path and Path(config_path).exists():
             try:
-                cursor.execute("SELECT 1 FROM sys.external_file_formats WHERE name = 'ParquetFileFormat'")
-                if not cursor.fetchone():
-                    create_file_format_sql = """
-                    CREATE EXTERNAL FILE FORMAT ParquetFileFormat
-                    WITH (
-                        FORMAT_TYPE = PARQUET
-                    )
-                    """
-                    cursor.execute(create_file_format_sql)
+                with open(config_path, 'r') as f:
+                    config_data = json.load(f)
+                return ReconConfig(**config_data)
             except Exception as e:
-                logger.warning(f"Error checking/creating external file format: {str(e)}")
-            
-            # Extract just the filename from the URL
-            blob_path = blob_url.split(f"{self.config.azure_container}/")[1]
-            
-            # Create external table
-            create_sql = f"""
-            CREATE TABLE {table_name} (
-                {columns_sql}
-            )
-            WITH (
-                LOCATION = '{blob_path}',
-                DATA_SOURCE = ExternalDataSource,
-                FILE_FORMAT = ParquetFileFormat
-            )
-            """
-            
-            cursor.execute(create_sql)
-            logger.info(f"External table {table_name} created successfully in Fabric")
-            
-        except Exception as e:
-            logger.error(f"Failed to create Fabric external table: {str(e)}")
-            logger.error(traceback.format_exc())
-            raise
+                print(f"Failed to load config from {config_path}: {e}. Using defaults.")
+        
+        return ReconConfig()
+    
+    def _generate_execution_id(self) -> str:
+        """Generate unique execution ID"""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        hash_input = f"{timestamp}_{os.getpid()}"
+        return f"recon_{timestamp}_{hashlib.md5(hash_input.encode()).hexdigest()[:8]}"
