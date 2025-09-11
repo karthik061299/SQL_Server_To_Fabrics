@@ -437,3 +437,278 @@ except Exception as e:
 ```
 
 **Impact:** Medium - Complete redesign of error handling approach
+
+## 4. Optimization Suggestions
+
+### 4.1 Architectural Redesign
+
+**Current Approach:**
+Monolithic stored procedure with complex dynamic SQL generation.
+
+**Recommended Optimization:**
+
+```
+Modular Notebook Architecture:
+
+1. Main Orchestration Notebook
+   ├── Parameter validation and initialization
+   ├── Execution logging
+   └── Orchestration of child notebooks
+
+2. Data Extraction Notebook
+   ├── Source data retrieval
+   ├── Initial filtering
+   └── Temporary view creation
+
+3. Data Transformation Notebook
+   ├── Join operations
+   ├── Measure calculations
+   └── Hash value generation
+
+4. Data Loading Notebook
+   ├── Change detection
+   ├── Delta table updates
+   └── Result reporting
+
+5. Utility Notebooks
+   ├── Logging functions
+   ├── Error handling
+   └── Performance monitoring
+```
+
+**Implementation Example:**
+```python
+# 1. Main Orchestration Notebook
+
+# Parameter widgets
+dbutils.widgets.text("pJobStartDateTime", "")
+dbutils.widgets.text("pJobEndDateTime", "")
+
+# Get parameters
+start_date = dbutils.widgets.get("pJobStartDateTime")
+end_date = dbutils.widgets.get("pJobEndDateTime")
+
+# Parameter validation
+if not start_date or not end_date:
+    raise ValueError("Start date and end date are required")
+
+# Special date handling
+if start_date == "01/01/1900":
+    start_date = "01/01/1700"
+
+# Start logging
+log_execution_start("uspSemanticClaimTransactionMeasuresData", {"start_date": start_date, "end_date": end_date})
+
+try:
+    # Run extraction notebook
+    dbutils.notebook.run("./1_Data_Extraction", timeout_seconds=3600, arguments={"start_date": start_date, "end_date": end_date})
+    
+    # Run transformation notebook
+    dbutils.notebook.run("./2_Data_Transformation", timeout_seconds=3600)
+    
+    # Run loading notebook
+    result = dbutils.notebook.run("./3_Data_Loading", timeout_seconds=3600)
+    
+    # Log success
+    log_execution_success("uspSemanticClaimTransactionMeasuresData", result)
+    
+except Exception as e:
+    # Log failure
+    log_execution_failure("uspSemanticClaimTransactionMeasuresData", str(e))
+    raise
+```
+
+### 4.2 Temporary Data Storage Strategy
+
+**Current Approach:**
+Dynamically named global temporary tables (`##CTM` + session ID).
+
+**Recommended Optimization:**
+
+```python
+# Comprehensive temporary data management strategy
+
+# 1. For small datasets: Spark temporary views
+def create_temp_view(name, query):
+    """Create a temporary view with the given name and query"""
+    spark.sql(f"DROP VIEW IF EXISTS {name}")
+    spark.sql(f"CREATE TEMPORARY VIEW {name} AS {query}")
+    return name
+
+# 2. For medium datasets: Cached DataFrames
+def create_cached_df(query):
+    """Create and cache a DataFrame from the given query"""
+    df = spark.sql(query)
+    df.cache()
+    return df
+
+# 3. For large datasets: Temporary Delta tables
+def create_temp_delta_table(name, query, partition_by=None):
+    """Create a temporary Delta table with optional partitioning"""
+    # Generate unique name with session ID
+    import uuid
+    session_id = str(uuid.uuid4()).replace('-', '')[:8]
+    full_name = f"temp.{name}_{session_id}"
+    
+    # Drop if exists
+    spark.sql(f"DROP TABLE IF EXISTS {full_name}")
+    
+    # Create table
+    if partition_by:
+        spark.sql(f"""
+        CREATE TABLE {full_name}
+        USING DELTA
+        PARTITIONED BY ({partition_by})
+        AS {query}
+        """)
+    else:
+        spark.sql(f"""
+        CREATE TABLE {full_name}
+        USING DELTA
+        AS {query}
+        """)
+    
+    return full_name
+```
+
+### 4.3 Hash-Based Change Detection
+
+**Current Approach:**
+Complex hash generation and comparison for change detection.
+
+**Recommended Optimization:**
+
+```python
+# Efficient hash-based change detection
+from pyspark.sql.functions import sha2, concat_ws, col, when, lit
+
+def detect_changes(new_data_df, existing_table, key_columns, hash_columns):
+    """Detect new and changed records using hash-based comparison"""
+    # Generate hash value for new data
+    col_refs = [col(c) for c in hash_columns]
+    new_data_with_hash = new_data_df.withColumn("HashValue", 
+                                             sha2(concat_ws("~", *col_refs), 512))
+    
+    # Read existing data with key columns and hash
+    if spark.catalog.tableExists(existing_table):
+        existing_data = spark.table(existing_table).select(
+            *key_columns, "HashValue"
+        )
+        
+        # Join with new data to identify changes
+        join_condition = " AND ".join([f"new.{k} = existing.{k}" for k in key_columns])
+        
+        # Mark records as new, changed, or unchanged
+        result = new_data_with_hash.alias("new").join(
+            existing_data.alias("existing"),
+            expr(join_condition),
+            "left_outer"
+        ).select(
+            "new.*",
+            when(col("existing.HashValue").isNull(), lit("INSERT"))
+            .when(col("new.HashValue") != col("existing.HashValue"), lit("UPDATE"))
+            .otherwise(lit("UNCHANGED")).alias("ChangeType")
+        )
+        
+        # Filter to only changed records if needed
+        changed_records = result.filter(col("ChangeType").isin("INSERT", "UPDATE"))
+        return changed_records
+    else:
+        # All records are new if table doesn't exist
+        return new_data_with_hash.withColumn("ChangeType", lit("INSERT"))
+```
+
+### 4.4 Performance Optimization
+
+**Current Approach:**
+SQL Server-specific optimization techniques.
+
+**Recommended Optimization:**
+
+```python
+# Comprehensive performance optimization strategy
+
+# 1. Partitioning strategy for large tables
+def create_optimized_table(table_name, schema_name="semantic"):
+    """Create an optimized Delta table with appropriate partitioning"""
+    spark.sql(f"""
+    CREATE TABLE IF NOT EXISTS {schema_name}.{table_name}
+    (
+      FactClaimTransactionLineWCKey BIGINT,
+      RevisionNumber INT,
+      PolicyWCKey BIGINT,
+      PolicyRiskStateWCKey BIGINT,
+      ClaimWCKey BIGINT,
+      ClaimTransactionLineCategoryKey BIGINT,
+      ClaimTransactionWCKey BIGINT,
+      ClaimCheckKey BIGINT,
+      AgencyKey BIGINT,
+      SourceClaimTransactionCreateDate TIMESTAMP,
+      SourceClaimTransactionCreateDateKey INT,
+      TransactionCreateDate TIMESTAMP,
+      TransactionSubmitDate TIMESTAMP,
+      -- Add all other columns
+      ProcessedDate TIMESTAMP,
+      HashValue STRING
+    )
+    USING DELTA
+    PARTITIONED BY (YEAR(ProcessedDate), MONTH(ProcessedDate))
+    """)
+
+# 2. Batch processing for large datasets
+def process_in_batches(source_table, batch_size=100000):
+    """Process large datasets in batches"""
+    # Get total count and max key
+    count_df = spark.sql(f"SELECT COUNT(*) as total, MAX(FactClaimTransactionLineWCKey) as max_key FROM {source_table}")
+    total_count = count_df.collect()[0]["total"]
+    max_key = count_df.collect()[0]["max_key"]
+    
+    # Process in batches
+    current_key = 0
+    processed_count = 0
+    
+    while processed_count < total_count:
+        # Process batch
+        batch_df = spark.sql(f"""
+        SELECT * FROM {source_table}
+        WHERE FactClaimTransactionLineWCKey > {current_key}
+        ORDER BY FactClaimTransactionLineWCKey
+        LIMIT {batch_size}
+        """)
+        
+        # Get max key from this batch
+        if batch_df.count() > 0:
+            current_key = batch_df.agg({"FactClaimTransactionLineWCKey": "max"}).collect()[0][0]
+            
+            # Process this batch
+            process_batch(batch_df)
+            
+            # Update processed count
+            processed_count += batch_df.count()
+            
+            print(f"Processed {processed_count} of {total_count} records ({processed_count/total_count:.2%})")
+        else:
+            break
+
+# 3. Optimize join operations
+def optimize_joins(large_df, small_df, join_columns):
+    """Optimize join operations using broadcast joins for small tables"""
+    from pyspark.sql.functions import broadcast
+    
+    # Use broadcast join for small tables (< 10MB)
+    if small_df.count() * len(small_df.columns) < 1000000:  # Rough estimate
+        return large_df.join(broadcast(small_df), join_columns)
+    else:
+        return large_df.join(small_df, join_columns)
+
+# 4. Caching strategy
+def cache_with_strategy(df, storage_level=None):
+    """Cache DataFrame with appropriate storage level"""
+    from pyspark.storagelevel import StorageLevel
+    
+    if storage_level is None:
+        # Default to memory and disk
+        storage_level = StorageLevel.MEMORY_AND_DISK
+    
+    return df.persist(storage_level)
+```
