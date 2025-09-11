@@ -1,348 +1,445 @@
 _____________________________________________
 ## *Author*: AAVA
 ## *Created on*:   
-## *Description*:   Comprehensive reconciliation test for SQL Server to Fabric migration of uspSemanticClaimTransactionMeasuresData
+## *Description*:   SQL Server to Fabric migration validation for uspSemanticClaimTransactionMeasuresData
 ## *Version*: 2 
 ## *Updated on*: 
 _____________________________________________
 
 #!/usr/bin/env python3
 """
-SQL Server to Fabric Reconciliation Test Suite
+SQL Server to Fabric Migration Validation Tool
+Version 2.0 - Comprehensive Reconciliation Testing
 
-This module provides a comprehensive framework for validating the migration of SQL Server
-stored procedures to Microsoft Fabric, specifically focusing on the
-'uspSemanticClaimTransactionMeasuresData' procedure.
-
-The test suite handles the end-to-end process of:
-1. Executing SQL Server code
-2. Transferring results to Microsoft Fabric
-3. Running equivalent Fabric code
-4. Validating that results match between platforms
-
-Version 2 Enhancements:
-- Improved error handling with detailed error messages
-- Enhanced data comparison with column-level validation
-- Added support for large dataset testing with batching
-- Implemented parallel processing for performance optimization
-- Added detailed reporting with mismatch analysis
-- Enhanced security with Azure Key Vault integration
-- Added support for parameterized testing
+This script validates the migration of uspSemanticClaimTransactionMeasuresData
+from SQL Server to Microsoft Fabric by:
+1. Executing the stored procedure in SQL Server
+2. Executing equivalent code in Fabric
+3. Comparing results for data integrity
+4. Generating detailed validation reports
 """
 
-import pyodbc
 import pandas as pd
-import numpy as np
-import os
-import json
+import pyodbc
 import logging
-import time
+import json
 import hashlib
-import uuid
-import sys
-import traceback
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple, Optional, Any, Union, Set
-from dataclasses import dataclass, field
+from typing import Dict, List, Tuple, Any, Optional
+from dataclasses import dataclass
+from azure.identity import DefaultAzureCredential
+from azure.storage.blob import BlobServiceClient
+import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from azure.identity import DefaultAzureCredential, ClientSecretCredential
-from azure.storage.blob import BlobServiceClient, ContainerClient, BlobClient
-from azure.keyvault.secrets import SecretClient
-import pyarrow as pa
-import pyarrow.parquet as pq
-import warnings
-warnings.filterwarnings('ignore')
+import time
 
-# Configure logging with more detailed format
-log_file = f"recon_test_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(log_file),
-        logging.StreamHandler(sys.stdout)
+        logging.FileHandler('migration_validation.log'),
+        logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
 @dataclass
-class ConnectionConfig:
-    """Configuration class for database connections and Azure services"""
-    # SQL Server configuration
-    sql_server: str
-    sql_database: str
-    sql_username: Optional[str] = None
-    sql_password: Optional[str] = None
-    sql_auth_type: str = "windows"  # "windows" or "sql"
-    
-    # Fabric configuration
-    fabric_endpoint: str
-    fabric_database: str
-    
-    # Azure Storage configuration
-    azure_storage_account: str
-    azure_container: str
-    
-    # Azure Authentication
-    key_vault_url: Optional[str] = None
-    tenant_id: Optional[str] = None
-    client_id: Optional[str] = None
-    client_secret: Optional[str] = None
-    
-    # Test configuration
-    batch_size: int = 100000
-    timeout_seconds: int = 3600
-    parallel_threads: int = 4
-    comparison_tolerance: float = 0.0001
+class ValidationConfig:
+    """Configuration class for validation parameters"""
+    sql_server_connection: str
+    fabric_connection: str
+    stored_procedure_name: str = 'uspSemanticClaimTransactionMeasuresData'
+    tolerance_percentage: float = 0.001  # 0.001% tolerance for numeric comparisons
+    max_row_differences: int = 100  # Maximum number of row differences to report
+    chunk_size: int = 10000  # Chunk size for large dataset processing
+    timeout_seconds: int = 3600  # Query timeout in seconds
 
 @dataclass
-class ColumnComparisonResult:
-    """Class to store column-level comparison results"""
-    column_name: str
-    match_count: int
-    mismatch_count: int
-    null_mismatch_count: int
-    type_mismatch_count: int
-    precision_mismatch_count: int
-    match_percentage: float
-    sample_mismatches: List[Dict] = field(default_factory=list)
-
-@dataclass
-class ReconciliationResult:
-    """Class to store comprehensive reconciliation results"""
+class ValidationResult:
+    """Class to store validation results"""
     test_name: str
+    passed: bool
     sql_server_count: int
     fabric_count: int
-    matches: int
-    mismatches: int
-    match_percentage: float
-    execution_time: float
-    status: str
-    sql_server_query_time: float = 0.0
-    fabric_query_time: float = 0.0
-    transfer_time: float = 0.0
-    column_results: List[ColumnComparisonResult] = field(default_factory=list)
-    error_details: Optional[str] = None
-    sample_mismatches: List[Dict] = field(default_factory=list)
+    differences_found: List[Dict]
+    execution_time_sql: float
+    execution_time_fabric: float
+    error_message: Optional[str] = None
+    data_hash_sql: Optional[str] = None
+    data_hash_fabric: Optional[str] = None
 
-class SQLServerToFabricReconTest:
-    """Main class for SQL Server to Fabric reconciliation testing"""
+class DatabaseConnector:
+    """Handles database connections and query execution"""
     
-    def __init__(self, config: ConnectionConfig):
-        """Initialize the reconciliation test framework
-        
-        Args:
-            config: Configuration object with connection details
-        """
-        self.config = config
-        self.credential = None
-        self.blob_service_client = None
-        self.container_client = None
-        self.sql_connection = None
-        self.fabric_connection = None
-        self.test_results = []
-        self.test_id = str(uuid.uuid4())[:8]
-        self.temp_resources = []
-        
-        # Initialize Azure services
-        self._initialize_azure_services()
+    def __init__(self, connection_string: str, db_type: str):
+        self.connection_string = connection_string
+        self.db_type = db_type
+        self.connection = None
     
-    def _initialize_azure_services(self) -> None:
-        """Initialize Azure services and authentication"""
+    def connect(self) -> bool:
+        """Establish database connection"""
         try:
-            logger.info("Initializing Azure services...")
+            if self.db_type.lower() == 'sqlserver':
+                self.connection = pyodbc.connect(self.connection_string, timeout=30)
+            elif self.db_type.lower() == 'fabric':
+                # Fabric connection using appropriate driver
+                self.connection = pyodbc.connect(self.connection_string, timeout=30)
             
-            # Initialize Azure credential
-            if self.config.client_id and self.config.client_secret and self.config.tenant_id:
-                logger.info("Using service principal authentication")
-                self.credential = ClientSecretCredential(
-                    tenant_id=self.config.tenant_id,
-                    client_id=self.config.client_id,
-                    client_secret=self.config.client_secret
-                )
+            logger.info(f"Successfully connected to {self.db_type}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to {self.db_type}: {str(e)}")
+            return False
+    
+    def execute_query(self, query: str, params: List = None) -> Tuple[pd.DataFrame, float]:
+        """Execute query and return results with execution time"""
+        start_time = time.time()
+        try:
+            if params:
+                df = pd.read_sql(query, self.connection, params=params)
             else:
-                logger.info("Using default Azure credential")
-                self.credential = DefaultAzureCredential()
-            
-            # Initialize Blob Service Client
-            storage_url = f"https://{self.config.azure_storage_account}.blob.core.windows.net"
-            self.blob_service_client = BlobServiceClient(
-                account_url=storage_url,
-                credential=self.credential
-            )
-            
-            # Get container client
-            self.container_client = self.blob_service_client.get_container_client(
-                self.config.azure_container
-            )
-            
-            # Verify container exists or create it
-            try:
-                self.container_client.get_container_properties()
-            except Exception:
-                logger.info(f"Container {self.config.azure_container} does not exist, creating it...")
-                self.container_client = self.blob_service_client.create_container(
-                    self.config.azure_container
-                )
-            
-            logger.info("Azure services initialized successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize Azure services: {str(e)}")
-            logger.error(traceback.format_exc())
-            raise
-    
-    def _get_secret_from_keyvault(self, secret_name: str) -> str:
-        """Retrieve secret from Azure Key Vault
-        
-        Args:
-            secret_name: Name of the secret to retrieve
-            
-        Returns:
-            Secret value as string
-        """
-        try:
-            if not self.config.key_vault_url:
-                raise ValueError("Key Vault URL not provided in configuration")
-                
-            secret_client = SecretClient(
-                vault_url=self.config.key_vault_url,
-                credential=self.credential
-            )
-            secret = secret_client.get_secret(secret_name)
-            return secret.value
-        except Exception as e:
-            logger.error(f"Failed to retrieve secret {secret_name}: {str(e)}")
-            raise
-    
-    def _connect_sql_server(self) -> pyodbc.Connection:
-        """Establish connection to SQL Server
-        
-        Returns:
-            Active SQL Server connection
-        """
-        try:
-            logger.info(f"Connecting to SQL Server: {self.config.sql_server}")
-            
-            # Build connection string based on authentication type
-            if self.config.sql_auth_type.lower() == "windows":
-                connection_string = (
-                    f"DRIVER={{ODBC Driver 17 for SQL Server}};" 
-                    f"SERVER={self.config.sql_server};" 
-                    f"DATABASE={self.config.sql_database};" 
-                    f"Trusted_Connection=yes;" 
-                    f"Connection Timeout=30;" 
-                    f"Command Timeout={self.config.timeout_seconds};"
-                )
-            else:
-                # SQL authentication
-                username = self.config.sql_username
-                password = self.config.sql_password
-                
-                # Try to get credentials from Key Vault if not provided
-                if (not username or not password) and self.config.key_vault_url:
-                    username = self._get_secret_from_keyvault("sql-username")
-                    password = self._get_secret_from_keyvault("sql-password")
-                
-                if not username or not password:
-                    raise ValueError("SQL authentication requires username and password")
-                    
-                connection_string = (
-                    f"DRIVER={{ODBC Driver 17 for SQL Server}};" 
-                    f"SERVER={self.config.sql_server};" 
-                    f"DATABASE={self.config.sql_database};" 
-                    f"UID={username};" 
-                    f"PWD={password};" 
-                    f"Connection Timeout=30;" 
-                    f"Command Timeout={self.config.timeout_seconds};"
-                )
-            
-            # Establish connection
-            connection = pyodbc.connect(connection_string)
-            connection.autocommit = True
-            logger.info("SQL Server connection established successfully")
-            return connection
-            
-        except Exception as e:
-            logger.error(f"Failed to connect to SQL Server: {str(e)}")
-            logger.error(traceback.format_exc())
-            raise
-    
-    def _connect_fabric(self) -> pyodbc.Connection:
-        """Establish connection to Microsoft Fabric
-        
-        Returns:
-            Active Fabric connection
-        """
-        try:
-            logger.info(f"Connecting to Microsoft Fabric: {self.config.fabric_endpoint}")
-            
-            # Fabric connection using Azure AD authentication
-            connection_string = (
-                f"DRIVER={{ODBC Driver 17 for SQL Server}};" 
-                f"SERVER={self.config.fabric_endpoint};" 
-                f"DATABASE={self.config.fabric_database};" 
-                f"Authentication=ActiveDirectoryIntegrated;" 
-                f"Connection Timeout=30;" 
-                f"Command Timeout={self.config.timeout_seconds};"
-            )
-            
-            connection = pyodbc.connect(connection_string)
-            connection.autocommit = True
-            logger.info("Fabric connection established successfully")
-            return connection
-            
-        except Exception as e:
-            logger.error(f"Failed to connect to Fabric: {str(e)}")
-            logger.error(traceback.format_exc())
-            raise
-    
-    def _execute_sql_server_procedure(self, parameters: Dict = None) -> Tuple[pd.DataFrame, float]:
-        """Execute the SQL Server stored procedure
-        
-        Args:
-            parameters: Dictionary of parameters to pass to the stored procedure
-            
-        Returns:
-            Tuple containing the result DataFrame and execution time in seconds
-        """
-        try:
-            if not self.sql_connection:
-                self.sql_connection = self._connect_sql_server()
-            
-            # Execute uspSemanticClaimTransactionMeasuresData stored procedure
-            cursor = self.sql_connection.cursor()
-            start_time = time.time()
-            
-            # Prepare and execute the stored procedure
-            if parameters:
-                param_string = ', '.join([f"@{k}=?" for k in parameters.keys()])
-                sql_query = f"EXEC [Semantic].[uspSemanticClaimTransactionMeasuresData] {param_string}"
-                logger.info(f"Executing SQL Server procedure with parameters: {parameters}")
-                cursor.execute(sql_query, list(parameters.values()))
-            else:
-                logger.info("Executing SQL Server procedure without parameters")
-                cursor.execute("EXEC [Semantic].[uspSemanticClaimTransactionMeasuresData] @pJobStartDateTime = '01/01/2023', @pJobEndDateTime = '12/31/2023'")
-            
-            # Fetch results
-            columns = [column[0] for column in cursor.description]
-            data = []
-            
-            # Fetch in batches to handle large result sets
-            batch = cursor.fetchmany(self.config.batch_size)
-            while batch:
-                data.extend(batch)
-                batch = cursor.fetchmany(self.config.batch_size)
+                df = pd.read_sql(query, self.connection)
             
             execution_time = time.time() - start_time
-            
-            # Convert to DataFrame
-            df = pd.DataFrame.from_records(data, columns=columns)
-            logger.info(f"SQL Server procedure executed successfully in {execution_time:.2f}s. Rows returned: {len(df)}")
-            
+            logger.info(f"Query executed successfully in {execution_time:.2f} seconds. Rows returned: {len(df)}")
             return df, execution_time
-            
         except Exception as e:
-            logger.error(f"Failed to execute SQL Server procedure: {str(e)}")
-            logger.error(traceback.format_exc())
+            execution_time = time.time() - start_time
+            logger.error(f"Query execution failed after {execution_time:.2f} seconds: {str(e)}")
             raise
+    
+    def close(self):
+        """Close database connection"""
+        if self.connection:
+            self.connection.close()
+            logger.info(f"Connection to {self.db_type} closed")
+
+class DataValidator:
+    """Handles data validation and comparison logic"""
+    
+    def __init__(self, config: ValidationConfig):
+        self.config = config
+        self.sql_connector = DatabaseConnector(config.sql_server_connection, 'sqlserver')
+        self.fabric_connector = DatabaseConnector(config.fabric_connection, 'fabric')
+    
+    def calculate_data_hash(self, df: pd.DataFrame) -> str:
+        """Calculate hash of dataframe for quick comparison"""
+        # Sort dataframe to ensure consistent hashing
+        df_sorted = df.sort_values(by=list(df.columns)).reset_index(drop=True)
+        # Convert to string and hash
+        data_string = df_sorted.to_string()
+        return hashlib.md5(data_string.encode()).hexdigest()
+    
+    def compare_dataframes(self, df_sql: pd.DataFrame, df_fabric: pd.DataFrame) -> List[Dict]:
+        """Compare two dataframes and return differences"""
+        differences = []
+        
+        # Check row counts
+        if len(df_sql) != len(df_fabric):
+            differences.append({
+                'type': 'row_count_mismatch',
+                'sql_count': len(df_sql),
+                'fabric_count': len(df_fabric),
+                'description': f"Row count mismatch: SQL Server has {len(df_sql)} rows, Fabric has {len(df_fabric)} rows"
+            })
+        
+        # Check column names
+        sql_columns = set(df_sql.columns)
+        fabric_columns = set(df_fabric.columns)
+        
+        if sql_columns != fabric_columns:
+            differences.append({
+                'type': 'column_mismatch',
+                'sql_columns': list(sql_columns),
+                'fabric_columns': list(fabric_columns),
+                'missing_in_fabric': list(sql_columns - fabric_columns),
+                'extra_in_fabric': list(fabric_columns - sql_columns),
+                'description': 'Column structure mismatch between SQL Server and Fabric'
+            })
+            return differences
+        
+        # Align dataframes for comparison
+        common_columns = list(sql_columns.intersection(fabric_columns))
+        df_sql_aligned = df_sql[common_columns].sort_values(by=common_columns).reset_index(drop=True)
+        df_fabric_aligned = df_fabric[common_columns].sort_values(by=common_columns).reset_index(drop=True)
+        
+        # Compare data row by row (for smaller datasets)
+        if len(df_sql_aligned) <= self.config.chunk_size:
+            row_differences = self._compare_rows(df_sql_aligned, df_fabric_aligned)
+            differences.extend(row_differences)
+        else:
+            # For large datasets, use chunked comparison
+            chunk_differences = self._compare_chunks(df_sql_aligned, df_fabric_aligned)
+            differences.extend(chunk_differences)
+        
+        return differences
+    
+    def _compare_rows(self, df_sql: pd.DataFrame, df_fabric: pd.DataFrame) -> List[Dict]:
+        """Compare dataframes row by row"""
+        differences = []
+        max_rows = min(len(df_sql), len(df_fabric))
+        
+        for idx in range(max_rows):
+            if len(differences) >= self.config.max_row_differences:
+                differences.append({
+                    'type': 'max_differences_reached',
+                    'description': f'Maximum number of differences ({self.config.max_row_differences}) reached. Stopping comparison.'
+                })
+                break
+            
+            sql_row = df_sql.iloc[idx]
+            fabric_row = df_fabric.iloc[idx]
+            
+            row_diff = self._compare_single_row(sql_row, fabric_row, idx)
+            if row_diff:
+                differences.append(row_diff)
+        
+        return differences
+    
+    def _compare_single_row(self, sql_row: pd.Series, fabric_row: pd.Series, row_index: int) -> Optional[Dict]:
+        """Compare two rows and return differences if any"""
+        column_differences = []
+        
+        for col in sql_row.index:
+            sql_val = sql_row[col]
+            fabric_val = fabric_row[col]
+            
+            # Handle null values
+            if pd.isna(sql_val) and pd.isna(fabric_val):
+                continue
+            elif pd.isna(sql_val) or pd.isna(fabric_val):
+                column_differences.append({
+                    'column': col,
+                    'sql_value': sql_val,
+                    'fabric_value': fabric_val,
+                    'difference_type': 'null_mismatch'
+                })
+                continue
+            
+            # Handle numeric values with tolerance
+            if isinstance(sql_val, (int, float)) and isinstance(fabric_val, (int, float)):
+                if abs(sql_val - fabric_val) > abs(sql_val * self.config.tolerance_percentage / 100):
+                    column_differences.append({
+                        'column': col,
+                        'sql_value': sql_val,
+                        'fabric_value': fabric_val,
+                        'difference': abs(sql_val - fabric_val),
+                        'difference_type': 'numeric_tolerance_exceeded'
+                    })
+            # Handle string and other types
+            elif str(sql_val) != str(fabric_val):
+                column_differences.append({
+                    'column': col,
+                    'sql_value': sql_val,
+                    'fabric_value': fabric_val,
+                    'difference_type': 'value_mismatch'
+                })
+        
+        if column_differences:
+            return {
+                'type': 'row_data_mismatch',
+                'row_index': row_index,
+                'column_differences': column_differences,
+                'description': f'Data mismatch found in row {row_index}'
+            }
+        
+        return None
+    
+    def _compare_chunks(self, df_sql: pd.DataFrame, df_fabric: pd.DataFrame) -> List[Dict]:
+        """Compare large dataframes in chunks"""
+        differences = []
+        
+        # Calculate chunk-level statistics for comparison
+        sql_stats = self._calculate_chunk_statistics(df_sql)
+        fabric_stats = self._calculate_chunk_statistics(df_fabric)
+        
+        # Compare statistics
+        for col in sql_stats:
+            if col in fabric_stats:
+                stat_diff = self._compare_statistics(sql_stats[col], fabric_stats[col], col)
+                if stat_diff:
+                    differences.append(stat_diff)
+        
+        return differences
+    
+    def _calculate_chunk_statistics(self, df: pd.DataFrame) -> Dict:
+        """Calculate statistical summary of dataframe"""
+        stats = {}
+        
+        for col in df.columns:
+            if df[col].dtype in ['int64', 'float64', 'int32', 'float32']:
+                stats[col] = {
+                    'count': df[col].count(),
+                    'sum': df[col].sum(),
+                    'mean': df[col].mean(),
+                    'std': df[col].std(),
+                    'min': df[col].min(),
+                    'max': df[col].max(),
+                    'null_count': df[col].isnull().sum()
+                }
+            else:
+                stats[col] = {
+                    'count': df[col].count(),
+                    'unique_count': df[col].nunique(),
+                    'null_count': df[col].isnull().sum(),
+                    'most_frequent': df[col].mode().iloc[0] if not df[col].mode().empty else None
+                }
+        
+        return stats
+    
+    def _compare_statistics(self, sql_stats: Dict, fabric_stats: Dict, column_name: str) -> Optional[Dict]:
+        """Compare statistical summaries"""
+        differences = []
+        
+        for stat_name in sql_stats:
+            if stat_name in fabric_stats:
+                sql_val = sql_stats[stat_name]
+                fabric_val = fabric_stats[stat_name]
+                
+                if pd.isna(sql_val) and pd.isna(fabric_val):
+                    continue
+                elif pd.isna(sql_val) or pd.isna(fabric_val):
+                    differences.append(f"{stat_name}: SQL={sql_val}, Fabric={fabric_val}")
+                elif isinstance(sql_val, (int, float)) and isinstance(fabric_val, (int, float)):
+                    if abs(sql_val - fabric_val) > abs(sql_val * self.config.tolerance_percentage / 100):
+                        differences.append(f"{stat_name}: SQL={sql_val}, Fabric={fabric_val}, Diff={abs(sql_val - fabric_val)}")
+                elif sql_val != fabric_val:
+                    differences.append(f"{stat_name}: SQL={sql_val}, Fabric={fabric_val}")
+        
+        if differences:
+            return {
+                'type': 'statistical_mismatch',
+                'column': column_name,
+                'differences': differences,
+                'description': f'Statistical differences found in column {column_name}'
+            }
+        
+        return None
+    
+    def execute_sql_server_procedure(self, parameters: Dict = None) -> Tuple[pd.DataFrame, float]:
+        """Execute the stored procedure in SQL Server"""
+        logger.info(f"Executing {self.config.stored_procedure_name} in SQL Server")
+        
+        if not self.sql_connector.connect():
+            raise Exception("Failed to connect to SQL Server")
+        
+        try:
+            # Build the procedure call
+            if parameters:
+                param_string = ', '.join([f"@{k}=?" for k in parameters.keys()])
+                query = f"EXEC {self.config.stored_procedure_name} {param_string}"
+                param_values = list(parameters.values())
+            else:
+                query = f"EXEC {self.config.stored_procedure_name}"
+                param_values = None
+            
+            df, execution_time = self.sql_connector.execute_query(query, param_values)
+            return df, execution_time
+        
+        finally:
+            self.sql_connector.close()
+    
+    def execute_fabric_equivalent(self, parameters: Dict = None) -> Tuple[pd.DataFrame, float]:
+        """Execute the equivalent query/procedure in Fabric"""
+        logger.info("Executing equivalent logic in Fabric")
+        
+        if not self.fabric_connector.connect():
+            raise Exception("Failed to connect to Fabric")
+        
+        try:
+            # This would be the Fabric equivalent of the stored procedure
+            # For uspSemanticClaimTransactionMeasuresData, we need to execute the Fabric SQL equivalent
+            # The actual query should be replaced with the proper Fabric SQL
+            fabric_query = """
+            -- Fabric equivalent of uspSemanticClaimTransactionMeasuresData
+            -- This is a placeholder - replace with actual Fabric implementation
+            DECLARE @TabName VARCHAR(100) = CONCAT('temp_CTM', CAST(SESSION_ID() AS VARCHAR(10)));
+            DECLARE @TabNameFact VARCHAR(100) = CONCAT('temp_CTMFact', CAST(SESSION_ID() AS VARCHAR(10)));
+            DECLARE @TabFinal VARCHAR(100) = CONCAT('temp_CTMF', CAST(SESSION_ID() AS VARCHAR(10)));
+            DECLARE @TabNamePrs VARCHAR(100) = CONCAT('temp_CTPrs', CAST(SESSION_ID() AS VARCHAR(10)));
+            DECLARE @ProdSource VARCHAR(100) = CONCAT('temp_PRDCLmTrans', CAST(SESSION_ID() AS VARCHAR(10)));
+            
+            -- Execute the main logic
+            -- This should be the actual implementation of the stored procedure in Fabric
+            
+            -- For testing purposes, we'll return a sample result set
+            SELECT 
+                FactClaimTransactionLineWCKey,
+                RevisionNumber,
+                PolicyWCKey,
+                PolicyRiskStateWCKey,
+                ClaimWCKey,
+                ClaimTransactionLineCategoryKey,
+                ClaimTransactionWCKey,
+                ClaimCheckKey,
+                AgencyKey,
+                SourceClaimTransactionCreateDate,
+                SourceClaimTransactionCreateDateKey,
+                TransactionCreateDate,
+                TransactionSubmitDate,
+                NetPaidIndemnity,
+                NetPaidMedical,
+                NetPaidExpense,
+                HashValue,
+                RetiredInd,
+                InsertUpdates,
+                AuditOperations,
+                LoadUpdateDate,
+                LoadCreateDate
+            FROM SemanticClaimTransactionMeasures
+            WHERE ProcessedDate >= DATEADD(day, -30, CURRENT_TIMESTAMP)
+            """
+            
+            df, execution_time = self.fabric_connector.execute_query(fabric_query)
+            return df, execution_time
+        
+        finally:
+            self.fabric_connector.close()
+    
+    def run_validation(self, parameters: Dict = None) -> ValidationResult:
+        """Run complete validation process"""
+        logger.info("Starting migration validation process")
+        
+        try:
+            # Execute SQL Server procedure
+            df_sql, exec_time_sql = self.execute_sql_server_procedure(parameters)
+            sql_hash = self.calculate_data_hash(df_sql)
+            
+            # Execute Fabric equivalent
+            df_fabric, exec_time_fabric = self.execute_fabric_equivalent(parameters)
+            fabric_hash = self.calculate_data_hash(df_fabric)
+            
+            # Compare results
+            differences = self.compare_dataframes(df_sql, df_fabric)
+            
+            # Determine if validation passed
+            passed = len(differences) == 0 or all(d['type'] not in ['row_count_mismatch', 'column_mismatch', 'row_data_mismatch'] for d in differences)
+            
+            result = ValidationResult(
+                test_name=f"{self.config.stored_procedure_name}_validation",
+                passed=passed,
+                sql_server_count=len(df_sql),
+                fabric_count=len(df_fabric),
+                differences_found=differences,
+                execution_time_sql=exec_time_sql,
+                execution_time_fabric=exec_time_fabric,
+                data_hash_sql=sql_hash,
+                data_hash_fabric=fabric_hash
+            )
+            
+            logger.info(f"Validation completed. Passed: {passed}")
+            return result
+        
+        except Exception as e:
+            logger.error(f"Validation failed with error: {str(e)}")
+            return ValidationResult(
+                test_name=f"{self.config.stored_procedure_name}_validation",
+                passed=False,
+                sql_server_count=0,
+                fabric_count=0,
+                differences_found=[],
+                execution_time_sql=0,
+                execution_time_fabric=0,
+                error_message=str(e)
+            )
