@@ -114,3 +114,47 @@ class DatabaseConnector:
         if self.connection:
             self.connection.close()
             logger.info(f"Connection to {self.db_type} closed")
+
+class DataValidator:
+    """Handles data validation and comparison logic"""
+    
+    def __init__(self, config: ValidationConfig):
+        self.config = config
+        self.sql_connector = DatabaseConnector(config.sql_server_connection, 'sqlserver')
+        self.fabric_connector = DatabaseConnector(config.fabric_connection, 'fabric')
+    
+    def calculate_data_hash(self, df: pd.DataFrame) -> str:
+        """Calculate hash of dataframe for quick comparison"""
+        # Sort dataframe to ensure consistent hashing
+        df_sorted = df.sort_values(by=list(df.columns)).reset_index(drop=True)
+        # Convert to string and hash
+        data_string = df_sorted.to_string()
+        return hashlib.md5(data_string.encode()).hexdigest()
+    
+    def compare_dataframes(self, df_sql: pd.DataFrame, df_fabric: pd.DataFrame) -> List[Dict]:
+        """Compare two dataframes and return differences"""
+        differences = []
+        
+        # Check row counts
+        if len(df_sql) != len(df_fabric):
+            differences.append({
+                'type': 'row_count_mismatch',
+                'sql_count': len(df_sql),
+                'fabric_count': len(df_fabric),
+                'description': f"Row count mismatch: SQL Server has {len(df_sql)} rows, Fabric has {len(df_fabric)} rows"
+            })
+        
+        # Check column names
+        sql_columns = set(df_sql.columns)
+        fabric_columns = set(df_fabric.columns)
+        
+        if sql_columns != fabric_columns:
+            differences.append({
+                'type': 'column_mismatch',
+                'sql_columns': list(sql_columns),
+                'fabric_columns': list(fabric_columns),
+                'missing_in_fabric': list(sql_columns - fabric_columns),
+                'extra_in_fabric': list(fabric_columns - sql_columns),
+                'description': 'Column structure mismatch between SQL Server and Fabric'
+            })
+            return differences
