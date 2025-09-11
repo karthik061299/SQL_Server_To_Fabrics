@@ -40,3 +40,77 @@ _____________________________________________
 --0.6		Zach.Henrys@afgroup.com			17-Jul-2023	  DAA-11838 TransactionAmount; DAA-13691 RecoveryDeductible breakouts
 --0.7		Tammy.Atkinson@afgroup.com		26-Jul-2023	  DAA-14404 Update Policy Riskstate Data pull to exclude retiredind=1 records
 --1.0		Fabric Conversion					Converted to Microsoft Fabric SQL format
+--------------------------------------------------------------------------------------------------------------------------------
+
+CREATE OR ALTER PROCEDURE Semantic.uspSemanticClaimTransactionMeasuresData_Fabric
+(
+    @pJobStartDateTime DATETIME2,
+    @pJobEndDateTime DATETIME2
+)
+AS
+BEGIN
+    -- SET NOCOUNT ON added to prevent extra result sets from
+    -- interfering with SELECT statements.
+    SET NOCOUNT ON;
+    
+    -- Handle legacy date conversion
+    IF @pJobStartDateTime = '01/01/1900'
+    BEGIN
+        SET @pJobStartDateTime = '01/01/1700';
+    END;
+
+    -- In Fabric, we don't need to manually disable/enable indexes
+    -- The following section replaces the index management in the original procedure
+    
+    -- Create base datasets using CTEs instead of temporary tables
+    WITH ProdSource AS (
+        SELECT 
+            FactClaimTransactionLineWCKey,
+            RevisionNumber,
+            HashValue,
+            LoadCreateDate
+        FROM Semantic.ClaimTransactionMeasures
+    ),
+    
+    PolicyRiskStateFiltered AS (
+        SELECT 
+            prs.*,
+            ROW_NUMBER() OVER(
+                PARTITION BY prs.PolicyWCKey, prs.RiskState 
+                ORDER BY prs.RetiredInd, prs.RiskStateEffectiveDate DESC, 
+                        prs.RecordEffectiveDate DESC, prs.LoadUpdateDate DESC, 
+                        prs.PolicyRiskStateWCKey DESC
+            ) AS Rownum
+        FROM Semantic.PolicyRiskStateDescriptors prs 
+        WHERE prs.RetiredInd = 0
+    ),
+    
+    PolicyRiskStateData AS (
+        SELECT *
+        FROM PolicyRiskStateFiltered
+        WHERE Rownum = 1
+    ),
+    
+    FactClaimTransactionData AS (
+        SELECT DISTINCT 
+            FactClaimTransactionLineWC.FactClaimTransactionLineWCKey,
+            FactClaimTransactionLineWC.RevisionNumber,
+            FactClaimTransactionLineWC.PolicyWCKey,
+            FactClaimTransactionLineWC.ClaimWCKey,
+            FactClaimTransactionLineWC.ClaimTransactionLineCategoryKey,
+            FactClaimTransactionLineWC.ClaimTransactionWCKey,
+            FactClaimTransactionLineWC.ClaimCheckKey,
+            FactClaimTransactionLineWC.SourceTransactionLineItemCreateDate,
+            FactClaimTransactionLineWC.SourceTransactionLineItemCreateDateKey,
+            FactClaimTransactionLineWC.SourceSystem,
+            FactClaimTransactionLineWC.RecordEffectiveDate,
+            CONCAT(FactClaimTransactionLineWC.FactClaimTransactionLineWCKey, '~', FactClaimTransactionLineWC.RevisionNumber) AS SourceSystemIdentifier,
+            FactClaimTransactionLineWC.TransactionAmount,
+            FactClaimTransactionLineWC.LoadUpdateDate,
+            FactClaimTransactionLineWC.RetiredInd
+        FROM EDSWH.dbo.FactClaimTransactionLineWC 
+        INNER JOIN EDSWH.dbo.DimClaimTransactionWC t
+            ON FactClaimTransactionLineWC.ClaimTransactionWCKey = t.ClaimTransactionWCKey
+        WHERE FactClaimTransactionLineWC.LoadUpdateDate >= @pJobStartDateTime 
+           OR t.LoadUpdateDate >= @pJobStartDateTime
+    )
