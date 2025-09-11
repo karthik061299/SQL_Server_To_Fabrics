@@ -398,3 +398,28 @@ class EnhancedSQLServerToFabricRecon:
             # Check again after GC
             new_memory_percent = psutil.virtual_memory().percent / 100
             self.logger.info(f"Memory usage after GC: {new_memory_percent:.1%}")
+    
+    def _optimize_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Optimize DataFrame memory usage"""
+        self.logger.info("Optimizing DataFrame memory usage")
+        
+        original_memory = df.memory_usage(deep=True).sum() / 1024**2
+        
+        # Optimize numeric columns
+        for col in df.select_dtypes(include=['int64']).columns:
+            df[col] = pd.to_numeric(df[col], downcast='integer')
+        
+        for col in df.select_dtypes(include=['float64']).columns:
+            df[col] = pd.to_numeric(df[col], downcast='float')
+        
+        # Optimize object columns
+        for col in df.select_dtypes(include=['object']).columns:
+            if df[col].nunique() / len(df) < 0.5:  # If less than 50% unique values
+                df[col] = df[col].astype('category')
+        
+        optimized_memory = df.memory_usage(deep=True).sum() / 1024**2
+        memory_reduction = ((original_memory - optimized_memory) / original_memory) * 100
+        
+        self.logger.info(f"Memory optimization: {original_memory:.2f}MB -> {optimized_memory:.2f}MB ({memory_reduction:.1f}% reduction)")
+        
+        return df
