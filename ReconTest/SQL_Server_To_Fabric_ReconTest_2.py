@@ -299,3 +299,16 @@ class StatisticalAnalyzer:
                     comparison_results[col] = {'error': str(e)}
         
         return comparison_results
+
+class EnhancedSQLServerToFabricRecon:
+    """Enhanced SQL Server to Fabric reconciliation with advanced features"""
+    
+    def __init__(self, config_path: Optional[str] = None):
+        # Load configuration
+        self.config = self._load_config(config_path)
+        
+        # Initialize components
+        self.logger = EnhancedLogger("ReconTest_v2", self.config.log_level)
+        self.performance_monitor = PerformanceMonitor(self.logger)
+        self.data_quality_validator = DataQualityValidator(self.logger)
+        self.statistical_analyzer = StatisticalAnalyzer(self.logger)
