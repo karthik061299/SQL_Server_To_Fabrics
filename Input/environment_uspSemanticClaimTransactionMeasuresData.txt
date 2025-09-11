@@ -1,0 +1,12 @@
+Databricks Pricing (DBU - Databricks Units): Enterprise DBU Cost: $0.15 - $0.75 per hour
+Table Names & Indicative Data Volume:
+
+Semantic.ClaimTransactionMeasures: ~1 TB
+Semantic.PolicyRiskStateDescriptors: ~500 GB
+EDSWH.dbo.FactClaimTransactionLineWC: ~1.5 TB
+EDSWH.dbo.dimClaimTransactionWC: ~500 GB
+Semantic.ClaimTransactionDescriptors: ~1 TB
+Semantic.ClaimDescriptors: ~1 TB
+Semantic.PolicyDescriptors: ~500 GB
+EDSWH.dbo.dimBrand: ~100 GB
+Processed Data Volume (~10%): ~650 GB

@@ -1,0 +1,431 @@
+USE [EDSMart]
+GO
+/****** Object:  StoredProcedure [Semantic].[uspSemanticClaimTransactionMeasuresData]    Script Date: 03/18/2025 2:32:09 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+
+--------------------------------------------------------------------------------------------------------------------------------
+--SP Name				: uspSemanticClaimTransactionMeasuresData
+--Purpose               : Get Data for ClaimMeasures population.
+--Database			    : EDSMart
+--Schema				: Claim
+--Create On			    : 04-NOV-2019
+--Execution (Example)	: EXEC Policy.uspSemanticClaimTransactionMeasuresData @pJobStartDateTime = '07/01/2019', @pJobEndDateTime ='07/02/2019'
+--Revistion History
+--Ver.#   Updated By									 Updated Date	Change History  
+----------------------------------------------------------------------------------------------------------------
+--0.1 Created By Tammy Atkinson
+--0.2 Perfected By Jack Tower
+--0.21 Updated Tammy Atkinson		02/22/2021 Added Left HASH JOINs
+--0.22		Tammy.Atkinson@afgroup.com		18-Feb-2021	  Updated to Correct RetiredInd
+--0.3		Tammy.Atkinson@afgroup.com		07-Jul-2021   Update to change @pJobStartDateTime= '01/01/1700' when it is '01/01/1900'
+--0.4		Tammy.Atkinson@afgroup.com		02-Nov-2021   Update to add DimBrand For use in update to the Rules where Brand Is Required
+--0.5		Tammy.Atkinson@afgroup.com		17-Jan-2023   DAA-9476 Add Additional Columns for RecoveryNonSubroNonSecondInjuryFund (5 Additional Columns added)
+--0.6		Zach.Henrys@afgroup.com			17-Jul-2023	  DAA-11838 TransactionAmount; DAA-13691 RecoveryDeductible breakouts
+--0.7		Tammy.Atkinson@afgroup.com		26-Jul-2023	  DAA-14404 Update Policy Riskstate Data pull to exclude retiredind=1 records
+--------------------------------------------------------------------------------------------------------------------------------
+
+ALTER procedure [Semantic].[uspSemanticClaimTransactionMeasuresData]
+(
+    @pJobStartDateTime datetime2
+  , @pJobEndDateTime datetime2
+)
+as
+begin
+    declare @TabName     varchar(100)
+          , @TabFinal    varchar(100)
+          , @TabNameFact varchar(100)
+          , @TabNamePrs  varchar(100)
+          , @ProdSource  varchar(100);
+    select @TabName = '##CTM' + cast(@@spid as varchar(10));
+    select @TabNameFact = '##CTMFact' + cast(@@spid as varchar(10));
+    select @TabFinal = '##CTMF' + cast(@@spid as varchar(10));
+    select @TabNamePrs = '##CTPrs' + cast(@@spid as varchar(10));
+    select @ProdSource = '##PRDCLmTrans' + cast(@@spid as varchar(10));
+    -- SET NOCOUNT ON added to prevent extra result sets from
+    -- interfering with SELECT statements.
+    set nocount on;
+    set xact_abort on;
+    if @pJobStartDateTime = '01/01/1900'
+    begin
+        set @pJobStartDateTime = '01/01/1700';
+    end;
+    declare @CATCount bigint = 0;
+    set @CATCount =
+    (
+        select max(t3.[rowcnt]) TableReferenceRowCount
+        from sys.tables               t2
+            inner join sys.sysindexes t3
+                on t2.object_id = t3.id
+        where t2.[name] = 'ClaimTransactionMeasures'
+              and schema_name(t2.[schema_id]) in ( 'semantic' )
+    );
+
+
+    if @CATCount = 0
+    begin
+        -- this is a test
+        if exists
+        (
+            select *
+            from sys.indexes
+            where object_id = object_id(N'Semantic.ClaimTransactionMeasures')
+                  and name = N'IXSemanticClaimTransactionMeasuresAgencyKey'
+        )
+        begin
+            alter index IXSemanticClaimTransactionMeasuresAgencyKey
+            on Semantic.ClaimTransactionMeasures
+            disable;
+        end;
+        if exists
+        (
+            select *
+            from sys.indexes
+            where object_id = object_id(N'Semantic.ClaimTransactionMeasures')
+                  and name = N'IXSemanticClaimTransactionMeasuresClaimCheckKey'
+        )
+        begin
+            alter index IXSemanticClaimTransactionMeasuresClaimCheckKey
+            on Semantic.ClaimTransactionMeasures
+            disable;
+        end;
+        if exists
+        (
+            select *
+            from sys.indexes
+            where object_id = object_id(N'Semantic.ClaimTransactionMeasures')
+                  and name = N'IXSemanticClaimTransactionMeasuresClaimTransactionLineCategoryKey'
+        )
+        begin
+            alter index IXSemanticClaimTransactionMeasuresClaimTransactionLineCategoryKey
+            on Semantic.ClaimTransactionMeasures
+            disable;
+        end;
+        if exists
+        (
+            select *
+            from sys.indexes
+            where object_id = object_id(N'Semantic.ClaimTransactionMeasures')
+                  and name = N'IXSemanticClaimTransactionMeasuresClaimTransactionWCKey'
+        )
+        begin
+            alter index IXSemanticClaimTransactionMeasuresClaimTransactionWCKey
+            on Semantic.ClaimTransactionMeasures
+            disable;
+        end;
+        if exists
+        (
+            select *
+            from sys.indexes
+            where object_id = object_id(N'Semantic.ClaimTransactionMeasures')
+                  and name = N'IXSemanticClaimTransactionMeasuresClaimWCKey'
+        )
+        begin
+            alter index IXSemanticClaimTransactionMeasuresClaimWCKey
+            on Semantic.ClaimTransactionMeasures
+            disable;
+        end;
+        if exists
+        (
+            select *
+            from sys.indexes
+            where object_id = object_id(N'Semantic.ClaimTransactionMeasures')
+                  and name = N'IXSemanticClaimTransactionMeasuresPolicyRiskStateWCKey'
+        )
+        begin
+            alter index IXSemanticClaimTransactionMeasuresPolicyRiskStateWCKey
+            on Semantic.ClaimTransactionMeasures
+            disable;
+        end;
+        if exists
+        (
+            select *
+            from sys.indexes
+            where object_id = object_id(N'Semantic.ClaimTransactionMeasures')
+                  and name = N'IXSemanticClaimTransactionMeasuresPolicyWCKey'
+        )
+        begin
+            alter index IXSemanticClaimTransactionMeasuresPolicyWCKey
+            on Semantic.ClaimTransactionMeasures
+            disable;
+        end;
+        if exists
+        (
+            select *
+            from sys.indexes
+            where object_id = object_id(N'Semantic.ClaimTransactionMeasures')
+                  and name = N'IXSemanticClaimTransactionMeasuresSourceClaimTransactionCreateDateKey'
+        )
+        begin
+            alter index IXSemanticClaimTransactionMeasuresSourceClaimTransactionCreateDateKey
+            on Semantic.ClaimTransactionMeasures
+            disable;
+        end;
+
+
+    end;
+    --DECLARE @pJobStartDateTime DATETIME2(7)= '04/01/2020', @pJobEndDateTime DATETIME2(7)= '04/30/21';
+
+    declare @Select_SQL_Query   nvarchar(max)
+          , @Measure_SQL_Query  varchar(max)
+          , @Measure_SQL_script nvarchar(max)
+          , @From_SQL_Query     nvarchar(max)
+          , @Full_SQL_Query     nvarchar(max);
+
+    -- Framing the Dynamic Query
+
+    set @Select_SQL_Query = N'  DROP TABLE IF EXISTS  ' + @TabName;
+    execute sp_executesql @Select_SQL_Query;
+    set @Select_SQL_Query = N'  DROP TABLE IF EXISTS  ' + @ProdSource;
+    execute sp_executesql @Select_SQL_Query;
+    set @Select_SQL_Query = N'  DROP TABLE IF EXISTS  ' + @TabFinal;
+    execute sp_executesql @Select_SQL_Query;
+    set @Select_SQL_Query = N'  DROP TABLE IF EXISTS  ' + @TabNameFact;
+    execute sp_executesql @Select_SQL_Query;
+    set @Select_SQL_Query = N'  DROP TABLE IF EXISTS  ' + @TabNamePrs;
+    execute sp_executesql @Select_SQL_Query;
+    set @Select_SQL_Query
+        = N' 
+select FactClaimTransactionLineWCKey,RevisionNumber,HashValue
+         , LoadCreateDate
+into ' + @ProdSource + N' 
+	FROM Semantic.ClaimTransactionMeasures;
+		
+select * 
+into ' + @TabNamePrs
+          + N' FROM
+(     SELECT prs.*
+         , ROW_NUMBER() OVER(PARTITION BY prs.PolicyWCKey
+                                        ,  prs.RiskState ORDER BY  prs.RetiredInd,  prs.RiskStateEffectiveDate desc,  prs.RecordEffectiveDate Desc, prs.LoadUpdateDate Desc,  prs.PolicyRiskStateWCKey DESC) AS Rownum
+    FROM Semantic.PolicyRiskStateDescriptors prs where prs.retiredind =0
+) s WHERE Rownum = 1
+ORDER BY PolicyWCKey;
+SELECT DISTINCT 
+		FactClaimTransactionLineWC.FactClaimTransactionLineWCKey
+		,FactClaimTransactionLineWC.RevisionNumber
+		,FactClaimTransactionLineWC.PolicyWCKey
+		,FactClaimTransactionLineWC.ClaimWCKey
+		,FactClaimTransactionLineWC.ClaimTransactionLineCategoryKey
+		,FactClaimTransactionLineWC.ClaimTransactionWCKey
+		,FactClaimTransactionLineWC.ClaimCheckKey
+		,FactClaimTransactionLineWC.SourceTransactionLineItemCreateDate
+		,FactClaimTransactionLineWC.SourceTransactionLineItemCreateDateKey
+		,FactClaimTransactionLineWC.SourceSystem
+		,FactClaimTransactionLineWC.RecordEffectiveDate
+		,CONCAT_WS(''~'',FactClaimTransactionLineWC.FactClaimTransactionLineWCKey,FactClaimTransactionLineWC.RevisionNumber ) SourceSystemIdentifier
+		,FactClaimTransactionLineWC.TransactionAmount
+		,FactClaimTransactionLineWC.LoadUpdateDate
+		, FactClaimTransactionLineWC.Retiredind
+		INTO ' + @TabNameFact
+          + N' FROM 
+		EDSWH.dbo.FactClaimTransactionLineWC 
+		inner Join edswh.dbo.dimClaimTransactionWC t
+		on FactClaimTransactionLineWC.ClaimTransactionWCKey=t.ClaimTransactionWCKey
+		WHERE 
+		FactClaimTransactionLineWC.LoadUpdateDate >= @pJobStartDateTime 
+		or t.LoadUpdateDate  >= @pJobStartDateTime ;
+	SELECT DISTINCT
+	FactClaimTransactionLineWC.FactClaimTransactionLineWCKey
+	,COALESCE(FactClaimTransactionLineWC.RevisionNumber,0) AS RevisionNumber
+	,FactClaimTransactionLineWC.PolicyWCKey
+	,COALESCE(rskState.PolicyRiskStateWCKey,-1) AS PolicyRiskStateWCKey
+	,FactClaimTransactionLineWC.ClaimWCKey
+	,FactClaimTransactionLineWC.ClaimTransactionLineCategoryKey
+	,FactClaimTransactionLineWC.ClaimTransactionWCKey
+	,FactClaimTransactionLineWC.ClaimCheckKey
+	,COALESCE(polAgcy.AgencyKey,-1) AS AgencyKey
+	,FactClaimTransactionLineWC.SourceTransactionLineItemCreateDate AS SourceClaimTransactionCreateDate
+	,FactClaimTransactionLineWC.SourceTransactionLineItemCreateDateKey AS SourceClaimTransactionCreateDateKey
+	,ClaimTransactionDescriptors.SourceTransactionCreateDate AS TransactionCreateDate
+	,ClaimTransactionDescriptors.TransactionSubmitDate
+	,FactClaimTransactionLineWC.SourceSystem
+	,FactClaimTransactionLineWC.RecordEffectiveDate
+	,FactClaimTransactionLineWC.SourceSystemIdentifier
+	,FactClaimTransactionLineWC.TransactionAmount,
+	FactClaimTransactionLineWC.RetiredInd, ';
+
+    --SET  @Measure_SQL_Query = REPLACE(REPLACE(REPLACE(STUFF((SELECT ',' +    Logic   + ' AS ' + Measure_name 
+    --            FROM  [Rules].[SemanticLayerMetaData]
+    --			WHERE SourceType = 'Claims'
+    --            FOR XML PATH('')) ,1,1,''), '&lt;','<'), '&gt;','>'),'&#x0D;',' ')
+
+    select @Measure_SQL_Query
+        = (string_agg(convert(nvarchar(max), concat(Logic, ' AS ', Measure_Name)), ',')within group(order by Measure_Name asc))
+    from Rules.SemanticLayerMetaData
+    where SourceType = 'Claims';
+    set @From_SQL_Query
+        = N' 
+	INTO ' + @TabName + N'
+	FROM	' + @TabNameFact + N' AS FactClaimTransactionLineWC
+	INNER  JOIN 
+	 Semantic.ClaimTransactionDescriptors AS ClaimTransactionDescriptors
+		ON factClaimTransactionLineWC.ClaimTransactionLineCategoryKey = ClaimTransactionDescriptors.ClaimTransactionLineCategoryKey
+		AND factClaimTransactionLineWC.ClaimTransactionWCKey = ClaimTransactionDescriptors.ClaimTransactionWCKey	
+		and FactClaimTransactionLineWC.ClaimWCKey=ClaimTransactionDescriptors.ClaimWCkey
+	INNER  JOIN 
+	 Semantic.ClaimDescriptors AS ClaimDescriptors
+		ON factClaimTransactionLineWC.ClaimWCKey = ClaimDescriptors.ClaimWCKey
+	LEFT Join 
+	 Semantic.PolicyDescriptors AS polAgcy 
+		ON FactClaimTransactionLineWC.PolicyWCKey = polAgcy.PolicyWCKey
+	Left Join edswh.dbo.dimBrand BK on PolAgcy.BrandKey=BK.BrandKey
+	LEFT Join 
+	' + @TabNamePrs
+          + N'  AS rskState 
+		ON FactClaimTransactionLineWC.PolicyWCKey = rskState.PolicyWCKey
+		AND COALESCE( ClaimDescriptors.EmploymentLocationState, ClaimDescriptors.JurisdictionState ) = rskState.RiskState;
+    	  DROP TABLE IF EXISTS  ' + @TabNameFact
+          + N' ;
+WITH C1 AS 
+	(SELECT 
+		CC.*
+		,CONVERT(NVARCHAR(512), HASHBYTES(''SHA2_512'', CONCAT_WS(''~'',FactClaimTransactionLineWCKey
+      ,RevisionNumber,PolicyWCKey,PolicyRiskStateWCKey,ClaimWCKey,ClaimTransactionLineCategoryKey,ClaimTransactionWCKey,ClaimCheckKey,AgencyKey
+	  ,SourceClaimTransactionCreateDate,SourceClaimTransactionCreateDateKey,TransactionCreateDate,TransactionSubmitDate
+      ,NetPaidIndemnity,NetPaidMedical,NetPaidExpense,NetPaidEmployerLiability,NetPaidLegal,NetPaidLoss
+      ,NetPaidLossAndExpense,NetIncurredIndemnity,NetIncurredMedical,NetIncurredExpense,NetIncurredEmployerLiability,NetIncurredLegal
+      ,NetIncurredLoss,NetIncurredLossAndExpense,ReservesIndemnity,ReservesMedical,ReservesExpense,ReservesEmployerLiability
+      ,ReservesLegal,ReservesLoss,ReservesLossAndExpense,GrossPaidIndemnity,GrossPaidMedical,GrossPaidExpense,GrossPaidEmployerLiability
+      ,GrossPaidLegal,GrossPaidLoss,GrossPaidLossAndExpense,GrossIncurredIndemnity,GrossIncurredMedical,GrossIncurredExpense
+      ,GrossIncurredEmployerLiability,GrossIncurredLegal,GrossIncurredLoss,GrossIncurredLossAndExpense,RecoveryIndemnity,RecoveryMedical,RecoveryExpense,RecoveryEmployerLiability
+      ,RecoveryLegal,RecoveryDeductible,RecoveryOverpayment,RecoverySubrogation,RecoveryApportionmentContribution,RecoverySecondInjuryFund
+      ,RecoveryLoss,RecoveryLossAndExpense,RecoveryNonSubroNonSecondInjuryFundEmployerLiability,RecoveryNonSubroNonSecondInjuryFundExpense
+	  ,RecoveryNonSubroNonSecondInjuryFundIndemnity,RecoveryNonSubroNonSecondInjuryFundLegal,RecoveryNonSubroNonSecondInjuryFundMedical
+	  ,SourceSystem,SourceSystemIdentifier,TransactionAmount,RecoveryDeductibleEmployerLiability,RecoveryDeductibleExpense,RecoveryDeductibleIndemnity,RecoveryDeductibleMedical
+	  ,RecoveryDeductibleLegal,RetiredInd)), 1) AS HashValue
+    FROM  ' + @TabName + N' AS CC
+	) 
+		select * INTO ' + @TabFinal + N'
+	from (	SELECT 	Distinct	c.*
+    ,CASE
+        WHEN cl.FactClaimTransactionLineWCKey IS NULL THEN 1
+        WHEN cl.FactClaimTransactionLineWCKey IS NOT NULL and c.HashValue <> cl.HashValue THEN 0
+        ELSE 3
+     END AS InsertUpdates
+    ,CASE
+		WHEN cl.FactClaimTransactionLineWCKey IS NULL THEN ''Inserted''
+		WHEN cl.FactClaimTransactionLineWCKey IS NOT NULL and  c.HashValue <> cl.HashValue THEN ''Updated''
+		ELSE NULL
+	 END AS AuditOperations
+	,GETDATE() AS LoadUpdateDate
+	,COALESCE(cl.LoadCreateDate, GETDATE()) LoadCreateDate
+    FROM 
+	C1 AS c
+    LEFT Join ' + @ProdSource + N'  AS cl 
+		ON c.FactClaimTransactionLineWCKey = cl.FactClaimTransactionLineWCKey
+        AND c.RevisionNumber = cl.RevisionNumber
+	WHERE 
+	cl.FactClaimTransactionLineWCKey IS NULL
+	or (cl.FactClaimTransactionLineWCKey IS NOT NULL 
+	and c.HashValue <> cl.HashValue) )	x; 
+	 DROP TABLE IF EXISTS ' + @TabName + N'  ; ';
+    set @Full_SQL_Query = N' ' + @Select_SQL_Query + @Measure_SQL_Query + @From_SQL_Query;
+
+    --PRINT @Full_SQL_Query;
+    --SELECT @Full_SQL_Query FOR XML PATH(''), ROOT('ROOT')
+
+    execute sp_executesql @Full_SQL_Query
+                        , N' @pJobStartDateTime DATETIME2,  @pJobEndDateTime DATETIME2'
+                        , @pJobStartDateTime = @pJobStartDateTime
+                        , @pJobEndDateTime = @pJobEndDateTime;
+
+    ----End of the store proc
+    set @Select_SQL_Query
+        = N' SELECT 
+		FactClaimTransactionLineWCKey
+		,RevisionNumber
+		,PolicyWCKey
+		,PolicyRiskStateWCKey
+		,ClaimWCKey
+		,ClaimTransactionLineCategoryKey
+		,ClaimTransactionWCKey
+		,ClaimCheckKey
+		,AgencyKey
+		,SourceClaimTransactionCreateDate
+		,SourceClaimTransactionCreateDateKey
+		,TransactionCreateDate
+		,TransactionSubmitDate
+		,SourceSystem
+		,RecordEffectiveDate
+		,SourceSystemIdentifier
+		,GrossIncurredEmployerLiability
+		,GrossIncurredExpense
+		,GrossIncurredIndemnity
+		,GrossIncurredLegal
+		,GrossIncurredLoss
+		,GrossIncurredLossAndExpense
+		,GrossIncurredMedical
+		,GrossPaidEmployerLiability
+		,GrossPaidExpense
+		,GrossPaidIndemnity
+		,GrossPaidLegal
+		,GrossPaidLoss
+		,GrossPaidLossAndExpense
+		,GrossPaidMedical
+		,NetIncurredEmployerLiability
+		,NetIncurredExpense
+		,NetIncurredIndemnity
+		,NetIncurredLegal
+		,NetIncurredLoss
+		,NetIncurredLossAndExpense
+		,NetIncurredMedical
+		,NetPaidEmployerLiability
+		,NetPaidExpense
+		,NetPaidIndemnity
+		,NetPaidLegal
+		,NetPaidLoss
+		,NetPaidLossAndExpense
+		,NetPaidMedical
+		,RecoveryApportionmentContribution
+		,RecoveryDeductible
+		,RecoveryEmployerLiability
+		,RecoveryExpense
+		,RecoveryIndemnity
+		,RecoveryLegal
+		,RecoveryLoss
+		,RecoveryLossAndExpense
+		,RecoveryMedical
+		,RecoveryOverpayment
+		,RecoverySecondInjuryFund
+		,RecoverySubrogation
+		,ReservesEmployerLiability
+		,ReservesExpense
+		,ReservesIndemnity
+		,ReservesLegal
+		,ReservesLoss
+		,ReservesLossAndExpense
+		,ReservesMedical
+		,RecoveryNonSubroNonSecondInjuryFundEmployerLiability
+		,RecoveryNonSubroNonSecondInjuryFundExpense
+		,RecoveryNonSubroNonSecondInjuryFundIndemnity
+		,RecoveryNonSubroNonSecondInjuryFundLegal
+		,RecoveryNonSubroNonSecondInjuryFundMedical
+		,TransactionAmount
+		,RecoveryDeductibleEmployerLiability
+		,RecoveryDeductibleExpense
+		,RecoveryDeductibleIndemnity
+		,RecoveryDeductibleMedical
+		,RecoveryDeductibleLegal
+		,HashValue
+		,RetiredInd
+		,InsertUpdates
+		,AuditOperations
+		,LoadUpdateDate
+		,LoadCreateDate
+
+		 FROM  ' + @TabFinal + N'  ;';
+    execute sp_executesql @Select_SQL_Query;
+    --if @CATCount = 0
+    --begin
+
+    --    alter index all on Semantic.ClaimTransactionMeasures rebuild;
+    --end;
+end;
