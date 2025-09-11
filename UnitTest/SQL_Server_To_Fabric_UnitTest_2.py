@@ -234,3 +234,149 @@ class TestUspSemanticClaimTransactionMeasuresData:
         )
         
         assert len(result) == 10000
+        
+    def test_boundary_dates(self, mock_fabric_connection):
+        """Test boundary date conditions"""
+        mock_conn, mock_cursor = mock_fabric_connection
+        
+        # Test with same start and end date
+        same_date = datetime.datetime(2023, 6, 15)
+        result = self._execute_fabric_query(mock_conn, same_date, same_date)
+        
+        mock_cursor.execute.assert_called()
+        
+        # Test with end date before start date
+        start_date = datetime.datetime(2023, 6, 15)
+        end_date = datetime.datetime(2023, 6, 10)
+        
+        result = self._execute_fabric_query(mock_conn, start_date, end_date)
+        
+        # Should handle gracefully or raise appropriate error
+        mock_cursor.execute.assert_called()
+    
+    def test_special_characters_in_data(self):
+        """Test handling of special characters in string fields"""
+        test_data = {
+            'SourceSystem': "Test'System\"With~Special|Characters",
+            'SourceSystemIdentifier': "ID~With|Special'Characters"
+        }
+        
+        processed_data = self._sanitize_string_data(test_data)
+        
+        assert processed_data['SourceSystem'] is not None
+        assert processed_data['SourceSystemIdentifier'] is not None
+    
+    # Error Handling Tests
+    def test_invalid_date_parameters(self, mock_fabric_connection):
+        """Test handling of invalid date parameters"""
+        mock_conn, mock_cursor = mock_fabric_connection
+        
+        with pytest.raises((ValueError, TypeError)):
+            self._execute_fabric_query(mock_conn, "invalid_date", datetime.datetime.now())
+        
+        with pytest.raises((ValueError, TypeError)):
+            self._execute_fabric_query(mock_conn, datetime.datetime.now(), "invalid_date")
+    
+    def test_database_connection_failure(self):
+        """Test handling of database connection failures"""
+        mock_conn = Mock(spec=FabricSQLConnector)
+        mock_conn.cursor.side_effect = Exception("Connection failed")
+        
+        with pytest.raises(Exception):
+            self._execute_fabric_query(
+                mock_conn,
+                datetime.datetime(2023, 1, 1),
+                datetime.datetime(2023, 12, 31)
+            )
+    
+    def test_sql_execution_error(self, mock_fabric_connection):
+        """Test handling of SQL execution errors"""
+        mock_conn, mock_cursor = mock_fabric_connection
+        mock_cursor.execute.side_effect = Exception("SQL execution failed")
+        
+        with pytest.raises(Exception):
+            self._execute_fabric_query(
+                mock_conn,
+                datetime.datetime(2023, 1, 1),
+                datetime.datetime(2023, 12, 31)
+            )
+    
+    def test_memory_overflow_protection(self, mock_fabric_connection):
+        """Test protection against memory overflow with very large datasets"""
+        mock_conn, mock_cursor = mock_fabric_connection
+        
+        # Simulate memory constraint
+        with patch('sys.getsizeof') as mock_sizeof:
+            mock_sizeof.return_value = 1024 * 1024 * 1024  # 1GB
+            
+            result = self._execute_fabric_query(
+                mock_conn,
+                datetime.datetime(2023, 1, 1),
+                datetime.datetime(2023, 12, 31)
+            )
+            
+            # Should handle large datasets appropriately
+            mock_cursor.execute.assert_called()
+    
+    # Fabric SQL Specific Tests
+    def test_fabric_workspace_connectivity(self, fabric_connection_config):
+        """Test connectivity to Fabric workspace"""
+        with patch('fabric_sql_connector.FabricSQLConnector') as mock_connector:
+            mock_instance = Mock()
+            mock_connector.return_value = mock_instance
+            
+            # Test connection establishment
+            conn = self._create_fabric_connection(fabric_connection_config)
+            
+            # Verify connection was attempted with correct parameters
+            mock_connector.assert_called_once()
+            assert conn is not None
+    
+    def test_fabric_delta_lake_integration(self, mock_fabric_connection):
+        """Test integration with Delta Lake in Fabric"""
+        mock_conn, mock_cursor = mock_fabric_connection
+        
+        # Test Delta Lake specific query
+        delta_query = """
+        SELECT * FROM DELTA.`lakehouse/tables/ClaimTransactionMeasures`
+        WHERE LoadUpdateDate >= ? AND LoadUpdateDate <= ?
+        """
+        
+        mock_cursor.execute.return_value = None
+        mock_cursor.fetchall.return_value = [(1, 'test')]
+        
+        result = self._execute_delta_lake_query(
+            mock_conn,
+            delta_query,
+            datetime.datetime(2023, 1, 1),
+            datetime.datetime(2023, 12, 31)
+        )
+        
+        assert result is not None
+        mock_cursor.execute.assert_called_once()
+    
+    def test_fabric_partition_handling(self, mock_fabric_connection):
+        """Test handling of partitioned data in Fabric"""
+        mock_conn, mock_cursor = mock_fabric_connection
+        
+        # Test partition pruning query
+        partition_query = """
+        SELECT * FROM Semantic.ClaimTransactionMeasures
+        WHERE SourceClaimTransactionCreateDateKey BETWEEN ? AND ?
+        """
+        
+        start_date_key = 20230101
+        end_date_key = 20231231
+        
+        mock_cursor.execute.return_value = None
+        mock_cursor.fetchall.return_value = [(1, 'test')]
+        
+        result = self._execute_partition_query(
+            mock_conn,
+            partition_query,
+            start_date_key,
+            end_date_key
+        )
+        
+        assert result is not None
+        mock_cursor.execute.assert_called_once()
