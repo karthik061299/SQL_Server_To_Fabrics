@@ -369,3 +369,20 @@ class EnhancedSQLServerToFabricRecon:
                 delay = self.config.retry_delay * (2 ** attempt)
                 self.logger.warning(f"Attempt {attempt + 1} failed: {str(e)}. Retrying in {delay}s...")
                 time.sleep(delay)
+    
+    def _get_connection_string(self, connection_type: str) -> str:
+        """Get connection string from Key Vault or environment"""
+        if self.key_vault:
+            try:
+                return self.key_vault.get_secret(f"{connection_type}-connection-string")
+            except Exception as e:
+                self.logger.warning(f"Failed to get connection string from Key Vault: {e}")
+        
+        # Fallback to environment variables
+        env_var = f"{connection_type.upper()}_CONNECTION_STRING"
+        connection_string = os.getenv(env_var)
+        
+        if not connection_string:
+            raise ValueError(f"Connection string not found in Key Vault or environment variable {env_var}")
+        
+        return connection_string
