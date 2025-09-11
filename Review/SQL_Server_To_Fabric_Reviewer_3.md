@@ -47,3 +47,239 @@ The procedure's primary purpose is to process claim transaction data, apply busi
 | Variable declarations | ❌ Low | DECLARE not supported in same way | Complete redesign required |
 | Procedural logic | ❌ Low | BEGIN/END blocks not supported | Algorithmic redesign required |
 | Dynamic SQL execution | ❌ Low | sp_executesql not available | Complete redesign required |
+
+## 3. Discrepancies and Issues
+
+### 3.1 Critical Issues
+
+#### 3.1.1 Stored Procedure Architecture
+
+**Issue**: Fabric doesn't support traditional stored procedures
+
+**SQL Server Implementation:**
+```sql
+ALTER procedure [Semantic].[uspSemanticClaimTransactionMeasuresData]
+(
+    @pJobStartDateTime datetime2
+  , @pJobEndDateTime datetime2
+)
+as
+begin
+    -- Procedure body
+end;
+```
+
+**Fabric Solution:**
+```python
+# Fabric Notebook implementation
+# Parameters as notebook widgets
+pJobStartDateTime = spark.conf.get("pJobStartDateTime")
+pJobEndDateTime = spark.conf.get("pJobEndDateTime")
+
+# Main processing function
+def process_semantic_claim_transaction_measures(start_date, end_date):
+    # Processing logic implemented in Python/Spark
+    # Return results as DataFrame
+    
+# Execute the function
+result_df = process_semantic_claim_transaction_measures(pJobStartDateTime, pJobEndDateTime)
+```
+
+**Impact:** High - Requires complete architectural redesign
+
+#### 3.1.2 Session ID and Temporary Table Management
+
+**Issue**: Fabric doesn't support global temporary tables with session-specific naming
+
+**SQL Server Implementation:**
+```sql
+declare @TabName varchar(100);
+select @TabName = '##CTM' + cast(@@spid as varchar(10));
+
+set @Select_SQL_Query = N'  DROP TABLE IF EXISTS  ' + @TabName;
+execute sp_executesql @Select_SQL_Query;
+
+-- Later used for dynamic table creation
+set @Select_SQL_Query = N' \nselect * \ninto ' + @TabName + N' FROM...';
+```
+
+**Fabric Solution:**
+```python
+# Use Spark temporary views instead of temp tables
+import uuid
+
+# Generate unique identifier for this session
+session_id = str(uuid.uuid4()).replace('-', '')[:10]
+temp_view_name = f"claim_transaction_measures_{session_id}"
+
+# Create temporary view
+spark.sql(f"""
+CREATE OR REPLACE TEMPORARY VIEW {temp_view_name} AS
+SELECT * FROM claim_transactions WHERE...
+""")
+
+# For larger datasets, cache the DataFrame
+claim_df = spark.sql(f"SELECT * FROM {temp_view_name}")
+claim_df.cache()
+
+# Clean up when done
+spark.sql(f"DROP VIEW IF EXISTS {temp_view_name}")
+claim_df.unpersist()
+```
+
+**Impact:** High - Requires fundamental restructuring of temporary data storage approach
+
+#### 3.1.3 Dynamic SQL Generation and Execution
+
+**Issue**: Fabric has limited support for dynamic SQL execution
+
+**SQL Server Implementation:**
+```sql
+-- Build dynamic SQL from multiple components
+set @Select_SQL_Query = N'  DROP TABLE IF EXISTS  ' + @TabName;
+
+-- Dynamically build measure calculations from metadata
+select @Measure_SQL_Query
+    = (string_agg(convert(nvarchar(max), concat(Logic, ' AS ', Measure_Name)), ',')within group(order by Measure_Name asc))
+from Rules.SemanticLayerMetaData
+where SourceType = 'Claims';
+
+-- Combine components
+set @Full_SQL_Query = N' ' + @Select_SQL_Query + @Measure_SQL_Query + @From_SQL_Query;
+
+-- Execute with parameters
+execute sp_executesql @Full_SQL_Query
+                    , N' @pJobStartDateTime DATETIME2,  @pJobEndDateTime DATETIME2'
+                    , @pJobStartDateTime = @pJobStartDateTime
+                    , @pJobEndDateTime = @pJobEndDateTime;
+```
+
+**Fabric Solution:**
+```python
+# Python-based dynamic query construction
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import expr
+
+# Get measure definitions from metadata
+measure_df = spark.sql("""
+    SELECT Measure_Name, Logic 
+    FROM Rules.SemanticLayerMetaData 
+    WHERE SourceType = 'Claims'
+    ORDER BY Measure_Name
+""")
+
+# Build select clause dynamically
+select_clause = "SELECT FactClaimTransactionLineWCKey, RevisionNumber"
+
+# Add measures dynamically
+measure_expressions = []
+for row in measure_df.collect():
+    measure_expressions.append(f"{row.Logic} AS {row.Measure_Name}")
+
+if measure_expressions:
+    select_clause += ", " + ", ".join(measure_expressions)
+
+# Build from clause
+from_clause = """
+FROM FactClaimTransactionLineWC
+INNER JOIN ClaimTransactionDescriptors 
+    ON FactClaimTransactionLineWC.ClaimTransactionWCKey = ClaimTransactionDescriptors.ClaimTransactionWCKey
+-- other joins
+"""
+
+# Build where clause
+where_clause = f"WHERE LoadUpdateDate >= '{start_date}' AND LoadUpdateDate <= '{end_date}'"
+
+# Execute final query
+final_query = f"{select_clause} {from_clause} {where_clause}"
+result_df = spark.sql(final_query)
+```
+
+**Impact:** High - Complex dynamic SQL generation requires complete redesign
+
+#### 3.1.4 Hash Value Generation for Change Detection
+
+**Issue**: Different hash functions available in Fabric
+
+**SQL Server Implementation:**
+```sql
+-- Hash generation for change detection
+CONVERT(NVARCHAR(512), HASHBYTES('SHA2_512', CONCAT_WS('~',FactClaimTransactionLineWCKey
+  ,RevisionNumber,PolicyWCKey,PolicyRiskStateWCKey,ClaimWCKey,ClaimTransactionLineCategoryKey,
+  -- many more fields concatenated
+  )), 1) AS HashValue
+```
+
+**Fabric Solution:**
+```python
+# Using Spark SQL hash functions
+from pyspark.sql.functions import sha2, concat_ws, col
+
+# Define columns to include in hash
+hash_columns = [
+    "FactClaimTransactionLineWCKey", "RevisionNumber", "PolicyWCKey", 
+    "PolicyRiskStateWCKey", "ClaimWCKey", "ClaimTransactionLineCategoryKey",
+    # Add all other required columns
+]
+
+# Create column references
+col_refs = [col(c) for c in hash_columns]
+
+# Generate hash value
+df = df.withColumn("HashValue", 
+                  sha2(concat_ws("~", *col_refs), 512))
+```
+
+**Impact:** Medium - Hash generation requires function replacement but concept remains similar
+
+### 3.2 Medium Priority Issues
+
+#### 3.2.1 Data Type Mapping
+
+**Issue**: SQL Server data types need mapping to Fabric equivalents
+
+**SQL Server Types and Fabric Equivalents:**
+
+| SQL Server Type | Fabric Equivalent | Notes |
+|----------------|-------------------|-------|
+| `DATETIME2` | `TIMESTAMP` | Compatible with minor syntax changes |
+| `VARCHAR(MAX)` | `STRING` | No length limitation in Fabric |
+| `DECIMAL(18,2)` | `DECIMAL(38,18)` | Higher precision in Fabric by default |
+| `BIT` | `BOOLEAN` | Direct mapping |
+| `VARBINARY(MAX)` | `BINARY` | Compatible with minor syntax changes |
+| `NVARCHAR` | `STRING` | No Unicode distinction in Fabric |
+| `INT` | `INT` or `LONG` | Direct mapping |
+| `BIGINT` | `LONG` | Direct mapping |
+
+**Impact:** Medium - Data type conversion required throughout codebase
+
+#### 3.2.2 Date Handling (1900 to 1700 Conversion)
+
+**Issue**: Different minimum date values
+
+**SQL Server Implementation:**
+```sql
+if @pJobStartDateTime = '01/01/1900'
+begin
+    set @pJobStartDateTime = '01/01/1700';
+end;
+```
+
+**Fabric Solution:**
+```python
+# Python implementation
+from datetime import datetime
+import pandas as pd
+
+# Convert string to datetime if needed
+if isinstance(pJobStartDateTime, str):
+    pJobStartDateTime = pd.to_datetime(pJobStartDateTime)
+
+min_date_sql = pd.to_datetime("1900-01-01")
+min_date_fabric = pd.to_datetime("1700-01-01")
+
+if pJobStartDateTime == min_date_sql:
+    pJobStartDateTime = min_date_fabric
+```
+
+**Impact:** Low - Simple value replacement
