@@ -1,334 +1,284 @@
 _____________________________________________
 ## *Author*: AAVA
 ## *Created on*:   
-## *Description*:   SQL Server stored procedure analysis for Microsoft Fabric migration
+## *Description*:   SQL Server stored procedure for processing claim transaction measures data with enhanced Microsoft Fabric migration considerations
 ## *Version*: 4 
 ## *Updated on*: 
 _____________________________________________
 
-# SQL Server to Microsoft Fabric Migration Analysis
+# SQL Server to Microsoft Fabric Migration Analysis: uspSemanticClaimTransactionMeasuresData
 
 ## 1. Complexity Metrics
 
 | Metric | Count | Details |
 |--------|-------|--------|
-| Number of Lines | 350+ | The stored procedure contains approximately 350 lines of code |
-| Tables Used | 8 | EDSWH.dbo.FactClaimTransactionLineWC, EDSWH.dbo.dimClaimTransactionWC, Semantic.ClaimTransactionDescriptors, Semantic.ClaimDescriptors, Semantic.PolicyDescriptors, Semantic.PolicyRiskStateDescriptors, EDSWH.dbo.dimBrand, Rules.SemanticLayerMetaData |
-| Joins | 7 | 4 INNER JOINs, 3 LEFT JOINs |
-| Temporary Tables | 5 | ##CTM, ##CTMFact, ##CTMF, ##CTPrs, ##PRDCLmTrans (all with session ID appended) |
+| Number of Lines | ~350 | Stored procedure with complex transformation logic |
+| Tables Used | 6 | FactClaimTransactionLineWC, ClaimTransactionDescriptors, ClaimDescriptors, PolicyDescriptors, PolicyRiskStateDescriptors, SemanticLayerMetaData |
+| Joins | 5-6 | Multiple INNER and LEFT joins between fact and dimension tables |
+| Temporary Tables | 5 | ##CTM, ##CTMFact, ##CTMF, ##CTPrs, ##PRDCLmTrans |
 | Aggregate Functions | Multiple | Dynamically generated from Rules.SemanticLayerMetaData |
-| DML Statements | 12 | 8 SELECT, 0 INSERT, 0 UPDATE, 0 DELETE, 4 DROP TABLE IF EXISTS |
-| Conditional Logic | 12 | Multiple IF-ELSE blocks, CASE statements, and COALESCE functions |
+| DML Statements | SELECT: Multiple<br>INSERT: Implicit<br>UPDATE: Implicit<br>DELETE: None | Primary operations are SELECT statements with implicit INSERT/UPDATE through result set generation |
+| Conditional Logic | Multiple | CASE statements, IF-ELSE blocks, dynamic SQL generation |
+| Overall Complexity Score | 80/100 | High complexity due to dynamic SQL, multiple transformations, and performance optimizations |
 
-## 2. Conversion Complexity
+## 2. Syntax Analysis
 
-| Aspect | Complexity Score | Details |
-|--------|-----------------|--------|
-| Overall Complexity | 85/100 | High complexity due to dynamic SQL, temporary tables, and complex transformations |
-| Dynamic SQL | High | Extensive use of dynamic SQL for measure calculations |
-| Temporary Tables | High | Heavy reliance on temporary tables for intermediate processing |
-| Index Management | Medium | Explicit index management for performance optimization |
-| Transaction Handling | Low | Basic transaction handling with XACT_ABORT |
-| System Functions | Medium | Uses SQL Server-specific functions like @@spid |
+### SQL Server-Specific Features Used
 
-## 3. Syntax Differences
+| Feature | Usage Count | Migration Complexity |
+|---------|-------------|----------------------|
+| Global Temporary Tables (##) | 5 | High - Requires replacement with Spark DataFrames or Delta tables |
+| Dynamic SQL Generation | Multiple | High - Requires refactoring to string interpolation or DataFrame operations |
+| SHA2_512 Hash Function | 1 | Medium - Requires equivalent hash function in Spark |
+| Index Management | Multiple | Medium - Replace with Delta Lake optimizations |
+| COALESCE Function | Multiple | Low - Direct equivalent available in Spark SQL |
+| ROW_NUMBER() Window Function | Multiple | Low - Direct equivalent available in Spark SQL |
+| CONCAT_WS Function | Multiple | Low - Direct equivalent available in Spark SQL |
+| CASE Statements | Multiple | Low - Direct equivalent available in Spark SQL |
+| System Variables (@@spid) | 1 | Medium - Requires alternative approach in Fabric |
 
-| SQL Server Feature | Count | Microsoft Fabric Equivalent | Migration Complexity |
-|-------------------|-------|----------------------------|----------------------|
-| Global Temporary Tables (##) | 5 | Spark DataFrames or Delta tables | High |
-| Dynamic SQL Execution | Multiple | String interpolation in Python/Scala | High |
-| HASHBYTES Function | 1 | Spark hash functions | Medium |
-| ROW_NUMBER() | 1 | Same function in Spark SQL | Low |
-| COALESCE Function | Multiple | Same function in Spark SQL | Low |
-| CONCAT_WS Function | 2 | Same function in Spark SQL | Low |
-| Index Management | Multiple | Delta Lake optimizations | Medium |
-| XACT_ABORT | 1 | Not directly applicable | Medium |
-| @@spid System Variable | Multiple | Session management in Spark | Medium |
-| CASE Statements | Multiple | Same in Spark SQL | Low |
-| String Aggregation | 1 | Spark string functions | Medium |
+### Syntax Differences Count: 15
 
-## 4. Manual Adjustments
+## 3. Manual Adjustments
 
-### 4.1 Function Replacements
+### Function Replacements
 
-| SQL Server Function | Microsoft Fabric Replacement | Implementation Notes |
-|--------------------|------------------------------|---------------------|
-| HASHBYTES('SHA2_512', ...) | sha2(concat_ws('~', ...), 512) | Use Spark's built-in hash functions |
-| @@spid | spark.sparkContext.applicationId | Replace session ID with application ID or use UUID |
-| string_agg() | collect_list() + concat_ws() | Combine Spark functions for string aggregation |
-| sp_executesql | Python/Scala string interpolation | Rewrite dynamic SQL as string manipulation |
+| SQL Server Function | Microsoft Fabric Equivalent | Adjustment Required |
+|--------------------|----------------------------|--------------------|
+| SHA2_512 | Spark's hash functions or UDFs | Create custom UDF or use built-in hash functions |
+| GETDATE() | current_timestamp() | Simple replacement |
+| COALESCE | COALESCE or nvl | Direct replacement |
+| CONCAT_WS | CONCAT_WS | Direct replacement |
+| ROW_NUMBER() | ROW_NUMBER() OVER() | Direct replacement |
 
-### 4.2 Syntax Adjustments
+### Structure Adjustments
 
-| SQL Server Syntax | Microsoft Fabric Syntax | Implementation Notes |
-|------------------|------------------------|---------------------|
-| DROP TABLE IF EXISTS | spark.sql("DROP TABLE IF EXISTS") | Use Spark SQL commands or DataFrame API |
-| Global temporary tables (##) | Temporary views or Delta tables | Replace with Spark temporary views or Delta tables |
-| ALTER INDEX | Delta Lake OPTIMIZE | Use Delta Lake's OPTIMIZE command |
-| SET NOCOUNT ON | Not applicable | Remove SQL Server-specific settings |
-| SET XACT_ABORT ON | Try-catch blocks | Implement error handling with try-catch |
+| SQL Server Structure | Microsoft Fabric Approach | Implementation Details |
+|---------------------|--------------------------|------------------------|
+| Stored Procedure | Notebook with SQL/Python/Spark | Convert procedure logic to notebook with appropriate language |
+| Global Temporary Tables | Spark DataFrames or Delta Tables | Replace with cached DataFrames or temporary Delta tables |
+| Dynamic SQL | String interpolation in Python/Scala | Convert dynamic SQL to string manipulation in chosen language |
+| Transaction Management | Delta Lake ACID transactions | Use Delta Lake's transaction capabilities |
+| Index Management | Delta Lake optimizations | Use Delta Lake's optimization features |
 
-### 4.3 Unsupported Features
+### Unsupported Features Workarounds
 
-| SQL Server Feature | Microsoft Fabric Alternative | Implementation Strategy |
-|-------------------|----------------------------|------------------------|
-| Global temporary tables | Spark DataFrames with caching | Create DataFrames and cache them for performance |
-| Index management | Delta Lake optimizations | Use Delta Lake's OPTIMIZE and ZORDER commands |
-| Dynamic SQL execution | String interpolation + spark.sql() | Build SQL strings and execute with spark.sql() |
-| System variables | Spark configuration or context | Access Spark context for session information |
+| Unsupported Feature | Workaround Approach | Implementation Complexity |
+|---------------------|---------------------|---------------------------|
+| Global Temporary Tables | Use DataFrames with caching | Medium - Requires refactoring temporary table logic |
+| System Variables (@@spid) | Use UUIDs for unique identifiers | Low - Simple replacement |
+| Dynamic SQL Execution | String interpolation + spark.sql() | High - Requires significant refactoring |
+| Index Hints | Spark configurations and optimizations | Medium - Requires understanding of Spark execution |
+| Transaction Control | Delta Lake merge operations | Medium - Requires refactoring transaction logic |
 
-## 5. Optimization Techniques
+## 4. Optimization Techniques
 
-### 5.1 Performance Optimization
+### Data Storage Optimizations
 
-| Technique | Implementation in Fabric | Benefit |
-|-----------|--------------------------|--------|
-| Partitioning | Partition Delta tables by date fields | Improved query performance and data pruning |
-| Caching | Cache frequently used DataFrames | Reduced computation time for repeated operations |
-| Query Optimization | Use DataFrame API instead of SQL when possible | Better performance and type safety |
-| Broadcast Joins | Use broadcast hints for small dimension tables | Reduced shuffle operations |
-| Columnar Storage | Use Delta Lake's columnar format | Better compression and query performance |
-| Predicate Pushdown | Filter data early in the pipeline | Reduced data processing volume |
-| Bucketing | Bucket large tables by join keys | Improved join performance |
+| Technique | Implementation Approach | Expected Benefit |
+|-----------|------------------------|------------------|
+| Delta Lake Format | Store all tables as Delta format | ACID transactions, time travel, schema evolution |
+| Partitioning | Partition by SourceClaimTransactionCreateDateKey | Improved query performance through partition pruning |
+| Z-Ordering | Z-order by frequently joined columns (ClaimWCKey, PolicyWCKey) | Better data locality for join operations |
+| Auto-Optimize | Enable Delta Lake auto-optimize features | Automatic file compaction and optimization |
+| Bloom Filters | Create bloom filters for selective columns | Faster filtering operations |
 
-### 5.2 Code Structure Optimization
+### Processing Optimizations
 
-| Aspect | Recommendation | Benefit |
-|--------|---------------|--------|
-| Modularization | Break down procedure into smaller functions | Improved maintainability and reusability |
-| Error Handling | Implement comprehensive try-catch blocks | Better error reporting and recovery |
-| Configuration | Externalize configuration parameters | Easier maintenance and flexibility |
-| Logging | Implement structured logging | Better monitoring and troubleshooting |
-| Documentation | Add comprehensive comments | Improved knowledge transfer and maintenance |
-| Parameterization | Use parameters instead of hard-coded values | Increased flexibility and reusability |
+| Technique | Implementation Approach | Expected Benefit |
+|-----------|------------------------|------------------|
+| DataFrame Caching | Cache frequently accessed DataFrames | Reduced computation for repeated access |
+| Broadcast Joins | Use broadcast hints for small dimension tables | Reduced shuffle operations for joins |
+| Predicate Pushdown | Structure queries to enable predicate pushdown | Reduced data scanning |
+| Columnar Processing | Leverage Fabric's columnar storage | Faster analytical queries |
+| Parallel Processing | Configure appropriate parallelism | Better resource utilization |
 
-## 6. Implementation Recommendations
+### Code Structure Optimizations
 
-### 6.1 Migration Approach
+| Technique | Implementation Approach | Expected Benefit |
+|-----------|------------------------|------------------|
+| Modular Notebooks | Break down complex logic into modular notebooks | Improved maintainability and reusability |
+| Parameterization | Use notebook parameters for flexible execution | Easier scheduling and orchestration |
+| Error Handling | Implement comprehensive error handling | Improved reliability and debugging |
+| Logging Framework | Implement structured logging | Better monitoring and troubleshooting |
+| Data Quality Checks | Add data validation steps | Improved data quality and reliability |
 
-1. **Phase 1: Data Layer Migration**
+## 5. Implementation Recommendations
+
+### Migration Approach
+
+1. **Data Layer Migration**:
    - Migrate source tables to Delta tables in Fabric
-   - Implement appropriate partitioning strategies
-   - Set up incremental data loading patterns
+   - Maintain similar schema structure but optimize for Fabric performance
+   - Consider partitioning strategies based on date ranges for large tables
+   - Implement appropriate security and access controls
 
-2. **Phase 2: Processing Logic Migration**
-   - Convert the stored procedure to a Spark SQL notebook
-   - Replace temporary tables with DataFrames or temporary views
-   - Implement dynamic SQL generation using string manipulation
+2. **Processing Logic Migration**:
+   - Convert the stored procedure to a Spark SQL notebook or Python/Scala notebook
+   - Replace temporary tables with DataFrames or temporary Delta tables
+   - Refactor dynamic SQL to use string interpolation or DataFrame operations
+   - Implement appropriate error handling and logging
+   - Break down complex logic into modular functions or notebooks
 
-3. **Phase 3: Performance Optimization**
-   - Optimize join operations using broadcast hints
-   - Implement caching strategies for frequently accessed data
-   - Use Delta Lake's optimization features
+3. **Performance Optimization**:
+   - Use Delta Lake's optimization features instead of explicit index management
+   - Implement appropriate caching strategies for frequently accessed data
+   - Leverage Fabric's distributed processing capabilities for large-scale data
+   - Use Z-ordering and partitioning for query performance
+   - Implement broadcast joins for small dimension tables
 
-4. **Phase 4: Testing and Validation**
+4. **Testing and Validation**:
    - Implement comprehensive testing to ensure data consistency
    - Compare results between SQL Server and Fabric implementations
    - Monitor performance and optimize as needed
+   - Validate all business rules and calculations
+   - Implement data quality checks
 
-### 6.2 Code Structure
+### Code Examples
+
+#### 1. Dynamic SQL Replacement
 
 ```python
-# Example Fabric implementation structure
+# Python example in Fabric notebook
+def generate_measures_logic(spark):
+    # Read rules from SemanticLayerMetaData table
+    rules_df = spark.sql("SELECT Measure_Name, Logic FROM Rules.SemanticLayerMetaData WHERE SourceType = 'Claims'")
+    
+    # Convert to dictionary for easier processing
+    rules_dict = {row['Measure_Name']: row['Logic'] for row in rules_df.collect()}
+    
+    # Apply transformations to main DataFrame
+    for measure_name, logic in rules_dict.items():
+        # Convert SQL Server logic to Spark SQL
+        spark_logic = convert_to_spark_sql(logic)
+        main_df = main_df.withColumn(measure_name, expr(spark_logic))
+    
+    return main_df
+```
 
-# Configuration
-params = {
-    "job_start_datetime": "2023-01-01",
-    "job_end_datetime": "2023-01-31"
-}
+#### 2. Temporary Tables Replacement
 
-# Handle special date case
-if params["job_start_datetime"] == "1900-01-01":
-    params["job_start_datetime"] = "1700-01-01"
+```python
+# Python example in Fabric notebook
+# Instead of: CREATE TABLE ##CTM...
 
-# Read source data
-fact_claim_transaction = spark.table("EDSWH.dbo.FactClaimTransactionLineWC")
-dim_claim_transaction = spark.table("EDSWH.dbo.dimClaimTransactionWC")
+# Create DataFrame and cache for performance
+ctm_df = spark.sql("""
+    SELECT 
+        FactClaimTransactionLineWC.FactClaimTransactionLineWCKey,
+        COALESCE(FactClaimTransactionLineWC.RevisionNumber, 0) AS RevisionNumber,
+        FactClaimTransactionLineWC.PolicyWCKey,
+        -- other columns
+    FROM fact_claim_transaction_line_wc AS FactClaimTransactionLineWC
+    INNER JOIN claim_transaction_descriptors AS ClaimTransactionDescriptors
+        ON FactClaimTransactionLineWC.ClaimTransactionLineCategoryKey = ClaimTransactionDescriptors.ClaimTransactionLineCategoryKey
+        -- other join conditions
+""")
 
-# Filter based on date parameters
-filtered_fact = fact_claim_transaction.filter(
-    f"LoadUpdateDate >= '{params['job_start_datetime']}'"
-)
-filtered_dim = dim_claim_transaction.filter(
-    f"LoadUpdateDate >= '{params['job_start_datetime']}'"
-)
+# Cache for performance
+ctm_df.cache()
 
-# Join fact and dimension tables
-fact_with_dim = filtered_fact.join(
-    filtered_dim,
-    "ClaimTransactionWCKey",
-    "inner"
-)
+# Use for subsequent operations
+# ...
 
-# Process policy risk state data
-policy_risk_state = spark.table("Semantic.PolicyRiskStateDescriptors")
-policy_risk_state = policy_risk_state.filter("RetiredInd = 0")
+# Unpersist when no longer needed
+ctm_df.unpersist()
+```
 
-# Window function for row numbering
-from pyspark.sql.window import Window
-import pyspark.sql.functions as F
+#### 3. Hash Value Generation
 
-window_spec = Window.partitionBy("PolicyWCKey", "RiskState") \
-    .orderBy(F.col("RetiredInd"), F.desc("RiskStateEffectiveDate"), 
-             F.desc("RecordEffectiveDate"), F.desc("LoadUpdateDate"), 
-             F.desc("PolicyRiskStateWCKey"))
+```python
+# Python example for hash value generation in Fabric
+from pyspark.sql.functions import sha2, concat_ws, col
 
-policy_risk_state = policy_risk_state \
-    .withColumn("Rownum", F.row_number().over(window_spec)) \
-    .filter("Rownum = 1") \
-    .orderBy("PolicyWCKey")
-
-# Create source system identifier
-fact_with_dim = fact_with_dim.withColumn(
-    "SourceSystemIdentifier",
-    F.concat_ws("~", F.col("FactClaimTransactionLineWCKey"), F.col("RevisionNumber"))
-)
-
-# Join with other dimension tables
-result_df = fact_with_dim.join(
-    spark.table("Semantic.ClaimTransactionDescriptors"),
-    ["ClaimTransactionLineCategoryKey", "ClaimTransactionWCKey", "ClaimWCKey"],
-    "inner"
-).join(
-    spark.table("Semantic.ClaimDescriptors"),
-    "ClaimWCKey",
-    "inner"
-).join(
-    spark.table("Semantic.PolicyDescriptors").alias("polAgcy"),
-    "PolicyWCKey",
-    "left"
-).join(
-    spark.table("EDSWH.dbo.dimBrand").alias("BK"),
-    fact_with_dim["BrandKey"] == F.col("BK.BrandKey"),
-    "left"
-).join(
-    policy_risk_state.alias("rskState"),
-    [fact_with_dim["PolicyWCKey"] == F.col("rskState.PolicyWCKey"),
-     F.coalesce(F.col("ClaimDescriptors.EmploymentLocationState"), 
-                F.col("ClaimDescriptors.JurisdictionState")) == F.col("rskState.RiskState")],
-    "left"
-)
-
-# Dynamic measure calculation
-# This would be implemented by reading the rules from Rules.SemanticLayerMetaData
-# and applying them dynamically
-
-# Generate hash values for change detection
-from pyspark.sql.functions import sha2, concat_ws
-
-result_df = result_df.withColumn(
+# Create hash value for change detection
+df = df.withColumn(
     "HashValue",
-    sha2(concat_ws("~", F.col("FactClaimTransactionLineWCKey"), 
-                   F.col("RevisionNumber"), 
-                   # ... other columns
-                  ), 512)
+    sha2(concat_ws(
+        "~",
+        col("FactClaimTransactionLineWCKey"),
+        col("RevisionNumber"),
+        col("PolicyWCKey"),
+        # Add all other relevant columns
+    ), 512)
 )
-
-# Read existing data for change detection
-existing_data = spark.table("Semantic.ClaimTransactionMeasures")
-
-# Identify inserts and updates
-result_with_changes = result_df.join(
-    existing_data.select("FactClaimTransactionLineWCKey", "RevisionNumber", "HashValue", "LoadCreateDate"),
-    ["FactClaimTransactionLineWCKey", "RevisionNumber"],
-    "left"
-).withColumn(
-    "InsertUpdates",
-    F.when(F.col("HashValue_right").isNull(), 1)
-     .when(F.col("HashValue") != F.col("HashValue_right"), 0)
-     .otherwise(3)
-).withColumn(
-    "AuditOperations",
-    F.when(F.col("HashValue_right").isNull(), "Inserted")
-     .when(F.col("HashValue") != F.col("HashValue_right"), "Updated")
-     .otherwise(None)
-).withColumn(
-    "LoadUpdateDate",
-    F.current_timestamp()
-).withColumn(
-    "LoadCreateDate",
-    F.coalesce(F.col("LoadCreateDate"), F.current_timestamp())
-)
-
-# Filter only changed records
-final_result = result_with_changes.filter("InsertUpdates IN (0, 1)")
-
-# Write results
-final_result.write.format("delta").mode("overwrite").saveAsTable("Semantic.ClaimTransactionMeasures")
 ```
 
-## 7. Additional Considerations
-
-### 7.1 Data Type Mapping
-
-| SQL Server Data Type | Microsoft Fabric Data Type | Notes |
-|---------------------|--------------------------|-------|
-| datetime2 | timestamp | Compatible conversion |
-| varchar | string | Compatible conversion |
-| bigint | long | Compatible conversion |
-| int | integer | Compatible conversion |
-| bit | boolean | Compatible conversion |
-| decimal | decimal | May need precision/scale adjustments |
-| nvarchar | string | Character encoding differences to consider |
-
-### 7.2 Error Handling
-
-SQL Server's error handling with XACT_ABORT should be replaced with Fabric's exception handling:
+#### 4. Incremental Processing
 
 ```python
-try:
-    # Processing logic
+# Python example for incremental processing
+from datetime import datetime
+
+def process_incremental_data(job_start_datetime, job_end_datetime):
+    # Convert parameters to appropriate format
+    start_date = job_start_datetime
+    if start_date == datetime(1900, 1, 1):
+        start_date = datetime(1700, 1, 1)
+    
+    # Read only new or changed data
+    incremental_df = spark.sql(f"""
+        SELECT * FROM source_table 
+        WHERE LoadUpdateDate >= '{start_date}' AND LoadUpdateDate < '{job_end_datetime}'
+    """)
+    
+    # Process the incremental data
     # ...
-except Exception as e:
-    # Error handling
-    print(f"Error occurred: {str(e)}")
-    # Log error details
-    # Implement appropriate recovery or notification
+    
+    # Merge into target table
+    # ...
 ```
 
-### 7.3 Monitoring and Logging
-
-Implement comprehensive logging in Fabric:
+#### 5. Delta Lake Merge Operations
 
 ```python
-# Log processing start
-print(f"Processing started at {datetime.now()}")
-print(f"Parameters: job_start_datetime={params['job_start_datetime']}, job_end_datetime={params['job_end_datetime']}")
+# Python example for Delta Lake merge operations
+from delta.tables import DeltaTable
 
-# Log intermediate steps
-print(f"Processed {fact_claim_transaction.count()} claim transaction records")
+# Read existing table
+delta_table = DeltaTable.forName(spark, "Semantic.ClaimTransactionMeasures")
 
-# Log completion
-print(f"Processing completed at {datetime.now()}")
-print(f"Inserted/Updated {result_df.filter("InsertUpdates IN (0, 1)").count()} records")
+# Perform merge operation (similar to SQL Server's update/insert logic)
+delta_table.alias("target").merge(
+    source_df.alias("source"),
+    "target.FactClaimTransactionLineWCKey = source.FactClaimTransactionLineWCKey AND target.RevisionNumber = source.RevisionNumber"
+).whenMatchedUpdateAll(
+    condition="target.HashValue <> source.HashValue"
+).whenNotMatchedInsertAll(
+).execute()
 ```
 
-### 7.4 Incremental Processing Strategy
+## 6. Migration Execution Plan
 
-The SQL Server procedure uses date-based incremental processing. In Fabric, this can be implemented using:
+1. **Phase 1: Environment Setup and Data Migration**
+   - Set up Fabric workspace and configure security
+   - Create Delta tables for source and target data
+   - Implement initial data load from SQL Server to Fabric
+   - Validate data integrity after migration
 
-1. **Delta Lake Change Data Feed**:
-   - Enable Change Data Feed on source tables
-   - Process only changed records based on the feed
+2. **Phase 2: Logic Migration and Testing**
+   - Convert stored procedure logic to Fabric notebooks
+   - Implement core transformation logic
+   - Develop and test incremental processing
+   - Validate results against SQL Server implementation
 
-2. **Watermark-based Processing**:
-   - Store the last processed timestamp
-   - Filter source data based on this watermark
-   - Update the watermark after successful processing
+3. **Phase 3: Performance Optimization**
+   - Implement partitioning and Z-ordering
+   - Optimize join strategies and caching
+   - Tune Spark configurations for optimal performance
+   - Benchmark and compare with SQL Server performance
 
-3. **Partition-based Processing**:
-   - Partition data by date fields
-   - Process only relevant partitions
-   - Use partition pruning for efficient filtering
+4. **Phase 4: Production Deployment**
+   - Set up monitoring and alerting
+   - Implement error handling and recovery mechanisms
+   - Deploy to production environment
+   - Establish operational procedures
 
-### 7.5 Security Considerations
-
-| SQL Server Security Feature | Microsoft Fabric Equivalent | Implementation Notes |
-|---------------------------|----------------------------|---------------------|
-| Schema-level permissions | Workspace access control | Configure workspace access in Fabric |
-| Row-level security | Row-level security in Fabric | Implement using Fabric's security features |
-| Column-level security | Column-level security in Fabric | Configure in Fabric security settings |
-| Data masking | Data masking in Fabric | Implement using Fabric's data protection features |
+5. **Phase 5: Ongoing Optimization**
+   - Monitor performance and usage patterns
+   - Implement continuous improvements
+   - Optimize resource utilization and costs
+   - Adapt to changing business requirements
 
 ## API Cost
-apiCost: 0.00
+API cost for this analysis: $0.00
