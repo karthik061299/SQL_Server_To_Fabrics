@@ -145,3 +145,99 @@ class PerformanceMonitor:
     def get_metrics(self) -> Dict:
         """Get all collected metrics"""
         return self.metrics
+
+class DataQualityValidator:
+    """Comprehensive data quality validation"""
+    
+    def __init__(self, logger):
+        self.logger = logger
+        self.quality_issues = []
+    
+    def validate_dataframe(self, df: pd.DataFrame, source: str) -> Dict[str, Any]:
+        """Perform comprehensive data quality checks"""
+        self.logger.info(f"Starting data quality validation for {source}")
+        
+        validation_results = {
+            'source': source,
+            'total_rows': len(df),
+            'total_columns': len(df.columns),
+            'null_counts': {},
+            'duplicate_rows': 0,
+            'data_types': {},
+            'outliers': {},
+            'business_rules': {}
+        }
+        
+        # Null value analysis
+        for col in df.columns:
+            null_count = df[col].isnull().sum()
+            null_percentage = (null_count / len(df)) * 100
+            validation_results['null_counts'][col] = {
+                'count': int(null_count),
+                'percentage': round(null_percentage, 2)
+            }
+            
+            if null_percentage > 50:
+                self.quality_issues.append(f"{source}: Column '{col}' has {null_percentage:.2f}% null values")
+        
+        # Duplicate analysis
+        duplicate_count = df.duplicated().sum()
+        validation_results['duplicate_rows'] = int(duplicate_count)
+        
+        if duplicate_count > 0:
+            self.quality_issues.append(f"{source}: Found {duplicate_count} duplicate rows")
+        
+        # Data type analysis
+        for col in df.columns:
+            validation_results['data_types'][col] = str(df[col].dtype)
+        
+        # Outlier detection for numeric columns
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        for col in numeric_cols:
+            if not df[col].empty:
+                Q1 = df[col].quantile(0.25)
+                Q3 = df[col].quantile(0.75)
+                IQR = Q3 - Q1
+                lower_bound = Q1 - 1.5 * IQR
+                upper_bound = Q3 + 1.5 * IQR
+                outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
+                
+                validation_results['outliers'][col] = {
+                    'count': len(outliers),
+                    'percentage': round((len(outliers) / len(df)) * 100, 2)
+                }
+        
+        # Business rule validation
+        validation_results['business_rules'] = self._validate_business_rules(df, source)
+        
+        self.logger.info(f"Data quality validation completed for {source}")
+        return validation_results
+    
+    def _validate_business_rules(self, df: pd.DataFrame, source: str) -> Dict[str, Any]:
+        """Validate business-specific rules"""
+        rules_results = {}
+        
+        # Example business rules - customize based on your data
+        if 'Amount' in df.columns:
+            negative_amounts = (df['Amount'] < 0).sum()
+            rules_results['negative_amounts'] = {
+                'count': int(negative_amounts),
+                'percentage': round((negative_amounts / len(df)) * 100, 2)
+            }
+        
+        if 'Date' in df.columns:
+            try:
+                df['Date'] = pd.to_datetime(df['Date'])
+                future_dates = (df['Date'] > datetime.now()).sum()
+                rules_results['future_dates'] = {
+                    'count': int(future_dates),
+                    'percentage': round((future_dates / len(df)) * 100, 2)
+                }
+            except:
+                rules_results['date_conversion_error'] = True
+        
+        return rules_results
+    
+    def get_quality_issues(self) -> List[str]:
+        """Get all identified quality issues"""
+        return self.quality_issues
