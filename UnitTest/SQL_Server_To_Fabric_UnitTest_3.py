@@ -303,3 +303,42 @@ def test_hash_calculation(mock_fabric_connection, sample_claim_transaction_data,
     
     # Should be empty as no changes
     assert result2.empty, "Second run should return empty result as no changes were made"
+
+def test_insert_updates_flag(mock_fabric_connection, sample_claim_transaction_data, 
+                            sample_claim_transaction_descriptors, sample_claim_descriptors,
+                            sample_policy_descriptors, sample_policy_risk_state,
+                            sample_existing_measures):
+    """TC005: Business logic - InsertUpdates flag calculation"""
+    # Arrange
+    fixtures = {
+        "EDSWH.dbo.FactClaimTransactionLineWC": sample_claim_transaction_data,
+        "EDSWH.dbo.DimClaimTransactionWC": pd.DataFrame({"ClaimTransactionWCKey": range(201, 206)}),
+        "Semantic.ClaimTransactionDescriptors": sample_claim_transaction_descriptors,
+        "Semantic.ClaimDescriptors": sample_claim_descriptors,
+        "Semantic.PolicyDescriptors": sample_policy_descriptors,
+        "Semantic.PolicyRiskStateDescriptors": sample_policy_risk_state,
+        "Semantic.ClaimTransactionMeasures": sample_existing_measures,
+        "EDSWH.dbo.DimBrand": pd.DataFrame({"BrandKey": range(501, 506)})
+    }
+    setup_mock_tables(mock_fabric_connection, fixtures)
+    
+    # Act
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    result = execute_function_under_test(mock_fabric_connection, start_date, end_date)
+    
+    # Assert
+    assert 'InsertUpdates' in result.columns, "Result should include InsertUpdates column"
+    assert 'AuditOperations' in result.columns, "Result should include AuditOperations column"
+    
+    # Check new record
+    new_records = result[result['FactClaimTransactionLineWCKey'] == 1003]
+    assert len(new_records) == 1, "Should have one new record"
+    assert new_records['InsertUpdates'].iloc[0] == 1, "New record should have InsertUpdates = 1"
+    assert new_records['AuditOperations'].iloc[0] == 'Inserted', "New record should be marked as Inserted"
+    
+    # Check updated record
+    updated_records = result[result['FactClaimTransactionLineWCKey'] == 1004]
+    assert len(updated_records) == 1, "Should have one updated record"
+    assert updated_records['InsertUpdates'].iloc[0] == 0, "Updated record should have InsertUpdates = 0"
+    assert updated_records['AuditOperations'].iloc[0] == 'Updated', "Updated record should be marked as Updated"
