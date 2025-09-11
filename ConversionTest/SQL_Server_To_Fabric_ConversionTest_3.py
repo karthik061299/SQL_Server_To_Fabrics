@@ -255,3 +255,16 @@ class ConversionTestHarness:
                 fabric_hash = self.calculate_data_hash(fabric_df)
                 data_matches = False
                 warnings.append("No common columns found between SQL Server and Fabric results")
+            
+            # Check against expected values if provided
+            if test_case.expected_row_count is not None and row_count_fabric != test_case.expected_row_count:
+                warnings.append(f"Expected row count {test_case.expected_row_count}, but got {row_count_fabric}")
+                
+            if test_case.expected_column_count is not None and column_count_fabric != test_case.expected_column_count:
+                warnings.append(f"Expected column count {test_case.expected_column_count}, but got {column_count_fabric}")
+                
+            if test_case.expected_hash is not None and fabric_hash != test_case.expected_hash:
+                warnings.append(f"Expected data hash {test_case.expected_hash}, but got {fabric_hash}")
+            
+            # Determine if test passed
+            passed = data_matches and not warnings
