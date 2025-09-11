@@ -280,3 +280,90 @@ class SQLServerToFabricReconTest:
             self.logger.error(f"Error creating external table: {str(e)}")
             self.results['errors'].append(f"External table creation error: {str(e)}")
             return False
+    
+    def execute_fabric_equivalent_query(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        Execute equivalent query in Fabric to match SQL Server procedure logic
+        
+        Args:
+            start_date (str): Job start datetime
+            end_date (str): Job end datetime
+            
+        Returns:
+            pd.DataFrame: Results from Fabric execution
+        """
+        try:
+            # Fabric equivalent query (simplified version of the stored procedure logic)
+            fabric_query = f"""
+            WITH PolicyRiskStateData AS (
+                SELECT prs.*,
+                       ROW_NUMBER() OVER(
+                           PARTITION BY prs.PolicyWCKey, prs.RiskState 
+                           ORDER BY prs.RetiredInd, prs.RiskStateEffectiveDate DESC, 
+                                   prs.RecordEffectiveDate DESC, prs.LoadUpdateDate DESC, 
+                                   prs.PolicyRiskStateWCKey DESC
+                       ) AS Rownum
+                FROM Semantic.PolicyRiskStateDescriptors prs 
+                WHERE prs.retiredind = 0
+            ),
+            FilteredPolicyRiskState AS (
+                SELECT * FROM PolicyRiskStateData WHERE Rownum = 1
+            ),
+            ClaimTransactionData AS (
+                SELECT DISTINCT 
+                    FactClaimTransactionLineWC.FactClaimTransactionLineWCKey,
+                    COALESCE(FactClaimTransactionLineWC.RevisionNumber, 0) AS RevisionNumber,
+                    FactClaimTransactionLineWC.PolicyWCKey,
+                    COALESCE(rskState.PolicyRiskStateWCKey, -1) AS PolicyRiskStateWCKey,
+                    FactClaimTransactionLineWC.ClaimWCKey,
+                    FactClaimTransactionLineWC.ClaimTransactionLineCategoryKey,
+                    FactClaimTransactionLineWC.ClaimTransactionWCKey,
+                    FactClaimTransactionLineWC.ClaimCheckKey,
+                    COALESCE(polAgcy.AgencyKey, -1) AS AgencyKey,
+                    FactClaimTransactionLineWC.SourceTransactionLineItemCreateDate AS SourceClaimTransactionCreateDate,
+                    FactClaimTransactionLineWC.SourceTransactionLineItemCreateDateKey AS SourceClaimTransactionCreateDateKey,
+                    ClaimTransactionDescriptors.SourceTransactionCreateDate AS TransactionCreateDate,
+                    ClaimTransactionDescriptors.TransactionSubmitDate,
+                    FactClaimTransactionLineWC.SourceSystem,
+                    FactClaimTransactionLineWC.RecordEffectiveDate,
+                    CONCAT(FactClaimTransactionLineWC.FactClaimTransactionLineWCKey, '~', FactClaimTransactionLineWC.RevisionNumber) AS SourceSystemIdentifier,
+                    FactClaimTransactionLineWC.TransactionAmount,
+                    FactClaimTransactionLineWC.RetiredInd
+                FROM EDSWH.dbo.FactClaimTransactionLineWC
+                INNER JOIN edswh.dbo.dimClaimTransactionWC t
+                    ON FactClaimTransactionLineWC.ClaimTransactionWCKey = t.ClaimTransactionWCKey
+                INNER JOIN Semantic.ClaimTransactionDescriptors AS ClaimTransactionDescriptors
+                    ON FactClaimTransactionLineWC.ClaimTransactionLineCategoryKey = ClaimTransactionDescriptors.ClaimTransactionLineCategoryKey
+                    AND FactClaimTransactionLineWC.ClaimTransactionWCKey = ClaimTransactionDescriptors.ClaimTransactionWCKey
+                    AND FactClaimTransactionLineWC.ClaimWCKey = ClaimTransactionDescriptors.ClaimWCkey
+                INNER JOIN Semantic.ClaimDescriptors AS ClaimDescriptors
+                    ON FactClaimTransactionLineWC.ClaimWCKey = ClaimDescriptors.ClaimWCKey
+                LEFT JOIN Semantic.PolicyDescriptors AS polAgcy
+                    ON FactClaimTransactionLineWC.PolicyWCKey = polAgcy.PolicyWCKey
+                LEFT JOIN FilteredPolicyRiskState AS rskState
+                    ON FactClaimTransactionLineWC.PolicyWCKey = rskState.PolicyWCKey
+                    AND COALESCE(ClaimDescriptors.EmploymentLocationState, ClaimDescriptors.JurisdictionState) = rskState.RiskState
+                WHERE FactClaimTransactionLineWC.LoadUpdateDate >= '{start_date}'
+                   OR t.LoadUpdateDate >= '{start_date}'
+            )
+            SELECT *,
+                   CONVERT(NVARCHAR(128), HASHBYTES('SHA2_256', 
+                       CONCAT(FactClaimTransactionLineWCKey, '~', RevisionNumber, '~', PolicyWCKey, '~', 
+                             PolicyRiskStateWCKey, '~', ClaimWCKey, '~', TransactionAmount)
+                   ), 1) AS HashValue,
+                   GETDATE() AS LoadUpdateDate,
+                   GETDATE() AS LoadCreateDate
+            FROM ClaimTransactionData
+            """
+            
+            df = pd.read_sql(fabric_query, self.fabric_conn)
+            
+            self.logger.info(f"Fabric query executed successfully. Rows returned: {len(df)}")
+            self.results['fabric_data'] = df
+            
+            return df
+            
+        except Exception as e:
+            self.logger.error(f"Error executing Fabric query: {str(e)}")
+            self.results['errors'].append(f"Fabric execution error: {str(e)}")
+            return pd.DataFrame()
