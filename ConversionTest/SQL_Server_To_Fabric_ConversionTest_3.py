@@ -143,3 +143,34 @@ class ConversionTestHarness:
         # Convert dataframe to a consistent string representation and hash it
         df_str = df.to_csv(index=False)
         return hashlib.md5(df_str.encode()).hexdigest()
+    
+    def execute_query(self, connection, query: str, parameters: Dict[str, Any] = None) -> Tuple[pd.DataFrame, float]:
+        """Execute a query and return results with execution time"""
+        start_time = time.time()
+        
+        try:
+            if parameters:
+                # Format the query with parameters
+                formatted_query = query
+                for param_name, param_value in parameters.items():
+                    placeholder = f"@{param_name}"
+                    if isinstance(param_value, str):
+                        formatted_query = formatted_query.replace(placeholder, f"'{param_value}'")
+                    else:
+                        formatted_query = formatted_query.replace(placeholder, str(param_value))
+                
+                df = pd.read_sql(formatted_query, connection)
+            else:
+                df = pd.read_sql(query, connection)
+                
+            execution_time = time.time() - start_time
+            return df, execution_time
+        except Exception as e:
+            execution_time = time.time() - start_time
+            logger.error(f"Query execution failed: {str(e)}")
+            raise
+    
+    def run_test_case(self, test_case: TestCase) -> TestResult:
+        """Run a single test case and return results"""
+        logger.info(f"Running test case: {test_case.id} - {test_case.name}")
+        warnings = []
