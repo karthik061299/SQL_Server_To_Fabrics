@@ -157,3 +157,39 @@ class TestUspSemanticClaimTransactionMeasuresData:
                 'retry_count': 3
             }
         }
+    
+    @pytest.fixture
+    def sample_input_data(self):
+        """
+        Fixture providing sample input data for testing
+        """
+        return pd.DataFrame({
+            'FactClaimTransactionLineWCKey': range(1, 101),
+            'RevisionNumber': np.ones(100, dtype=int),
+            'PolicyWCKey': range(201, 301),
+            'ClaimWCKey': range(101, 201),
+            'ClaimTransactionLineCategoryKey': range(301, 401),
+            'ClaimTransactionWCKey': range(401, 501),
+            'ClaimCheckKey': range(501, 601),
+            'TransactionAmount': np.random.uniform(100, 5000, 100),
+            'SourceTransactionLineItemCreateDate': pd.date_range('2024-01-01', periods=100, freq='D'),
+            'SourceTransactionLineItemCreateDateKey': range(20240101, 20240101+100),
+            'TransactionType': np.random.choice(['Payment', 'Adjustment', 'Recovery'], 100),
+            'RetiredInd': np.zeros(100, dtype=int),
+            'SourceSystem': np.random.choice(['System1', 'System2', 'System3'], 100)
+        })
+    
+    def test_basic_data_retrieval(self, setup_test_environment):
+        """
+        Test Case 1: Verify basic data retrieval from all source tables
+        """
+        logger.info("Testing basic data retrieval")
+        
+        test_data = setup_test_environment['test_data']
+        
+        # Assertions
+        assert len(test_data['fact_claim_data']) == 5
+        assert all(col in test_data['fact_claim_data'].columns for col in 
+                  ['FactClaimTransactionLineWCKey', 'ClaimWCKey', 'PolicyWCKey', 'TransactionAmount'])
+        
+        logger.info("Basic data retrieval test passed")
