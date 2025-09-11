@@ -237,3 +237,34 @@ def test_empty_source_data(mock_fabric_connection):
     
     # Assert
     assert result.empty, "Result should be empty with empty source data"
+
+def test_special_date_handling(mock_fabric_connection, sample_claim_transaction_data, 
+                              sample_claim_transaction_descriptors, sample_claim_descriptors,
+                              sample_policy_descriptors, sample_policy_risk_state,
+                              sample_existing_measures):
+    """TC003: Edge case - Special date handling (1900-01-01)"""
+    # Arrange
+    fixtures = {
+        "EDSWH.dbo.FactClaimTransactionLineWC": sample_claim_transaction_data,
+        "EDSWH.dbo.DimClaimTransactionWC": pd.DataFrame({"ClaimTransactionWCKey": range(201, 206)}),
+        "Semantic.ClaimTransactionDescriptors": sample_claim_transaction_descriptors,
+        "Semantic.ClaimDescriptors": sample_claim_descriptors,
+        "Semantic.PolicyDescriptors": sample_policy_descriptors,
+        "Semantic.PolicyRiskStateDescriptors": sample_policy_risk_state,
+        "Semantic.ClaimTransactionMeasures": sample_existing_measures,
+        "EDSWH.dbo.DimBrand": pd.DataFrame({"BrandKey": range(501, 506)})
+    }
+    setup_mock_tables(mock_fabric_connection, fixtures)
+    
+    # Mock the date conversion logic
+    with patch('fabric_sql_testing.execute_query') as mock_execute:
+        # Act
+        start_date = '1900-01-01'  # Special date that should be converted to 1700-01-01
+        end_date = '2023-01-31'
+        execute_function_under_test(mock_fabric_connection, start_date, end_date)
+        
+        # Assert
+        # Check that the query was executed with the converted date
+        mock_execute.assert_called()
+        call_args = mock_execute.call_args_list[0][0][0]
+        assert '1700-01-01' in call_args, "Special date 1900-01-01 should be converted to 1700-01-01"
