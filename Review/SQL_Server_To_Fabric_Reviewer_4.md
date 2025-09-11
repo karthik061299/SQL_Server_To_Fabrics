@@ -48,174 +48,259 @@ The procedure's primary purpose is to process claim transaction data, apply busi
 | Procedural logic | ❌ Low | BEGIN/END blocks not supported | Algorithmic redesign required |
 | Dynamic SQL execution | ❌ Low | sp_executesql not available | Complete redesign required |
 
-## 10. Updated Business Logic Validation
+## 12. Documentation and Knowledge Transfer Updates
 
-### 10.1 Comprehensive Business Rule Verification
+### 12.1 Migration Documentation Templates
 
-#### 10.1.1 Financial Calculations Validation
-```sql
--- Validate claim amount calculations
-WITH validation_results AS (
-    SELECT 
-        claim_id,
-        original_amount,
-        calculated_amount,
-        ABS(original_amount - calculated_amount) as difference,
-        CASE 
-            WHEN ABS(original_amount - calculated_amount) < 0.01 THEN 'PASS'
-            ELSE 'FAIL'
-        END as validation_status
-    FROM claim_validation_view
-)
-SELECT 
-    validation_status,
-    COUNT(*) as record_count,
-    AVG(difference) as avg_difference
-FROM validation_results
-GROUP BY validation_status
+#### 12.1.1 Technical Documentation Template
+```markdown
+# Technical Migration Documentation
+
+## Overview
+- **Source System**: [SQL Server Details]
+- **Target System**: [Fabric Environment Details]
+- **Migration Date**: [Date]
+- **Migration Team**: [Team Members]
+
+## Architecture Changes
+### Before (SQL Server)
+[Architecture Diagram]
+
+### After (Fabric)
+[Architecture Diagram]
+
+## Code Changes Summary
+### Stored Procedures Converted
+| Original SP | New Implementation | Complexity | Status |
+|-------------|-------------------|------------|--------|
+| uspSemanticClaimTransactionMeasuresData | semantic_claim_processing.py | High | Complete |
+
+### Data Model Changes
+[Document schema changes]
+
+## Performance Comparison
+[Before/After performance metrics]
+
+## Deployment Instructions
+[Step-by-step deployment guide]
+
+## Rollback Procedures
+[Emergency rollback steps]
 ```
 
-#### 10.1.2 Business Rules Testing Framework
+#### 12.1.2 User Training Materials
+```markdown
+# User Guide: Fabric Migration Changes
+
+## What's Changed
+- New user interface for data access
+- Updated report generation process
+- Enhanced security features
+
+## Step-by-Step Procedures
+### Accessing Claim Data
+1. Navigate to Fabric workspace
+2. Select SemanticClaimsLakehouse
+3. Use SQL endpoint for queries
+
+### Running Reports
+1. Open Power BI in Fabric
+2. Connect to lakehouse
+3. Use updated semantic model
+
+## Troubleshooting
+[Common issues and solutions]
+```
+
+### 12.2 Knowledge Transfer Sessions
 ```python
-class BusinessRuleValidator:
-    def __init__(self, spark_session):
-        self.spark = spark_session
-        
-    def validate_claim_processing_rules(self, df):
-        validation_results = []
-        
-        # Rule 1: Claim amounts must be positive
-        negative_amounts = df.filter("claim_amount <= 0").count()
-        validation_results.append({
-            'rule': 'Positive Claim Amounts',
-            'passed': negative_amounts == 0,
-            'failed_records': negative_amounts
-        })
-        
-        # Rule 2: Transaction dates must be within valid range
-        invalid_dates = df.filter(
-            "transaction_date < '2020-01-01' OR transaction_date > current_date()"
-        ).count()
-        validation_results.append({
-            'rule': 'Valid Transaction Dates',
-            'passed': invalid_dates == 0,
-            'failed_records': invalid_dates
-        })
-        
-        return validation_results
+# Knowledge transfer checklist
+knowledge_transfer_plan = {
+    'sessions': [
+        {
+            'topic': 'Fabric Architecture Overview',
+            'duration': '2 hours',
+            'audience': 'Technical Team',
+            'materials': ['architecture_diagrams.pdf', 'demo_environment']
+        },
+        {
+            'topic': 'Code Changes Deep Dive',
+            'duration': '4 hours',
+            'audience': 'Developers',
+            'materials': ['code_comparison.md', 'hands_on_exercises']
+        },
+        {
+            'topic': 'Operations and Monitoring',
+            'duration': '3 hours',
+            'audience': 'Operations Team',
+            'materials': ['monitoring_guide.pdf', 'runbook.md']
+        }
+    ],
+    'documentation': [
+        'technical_specification.md',
+        'user_guide.pdf',
+        'troubleshooting_guide.md',
+        'performance_tuning_guide.md'
+    ]
+}
 ```
 
-#### 10.1.3 Data Lineage Tracking
+## 13. Cost Optimization Guidelines
+
+### 13.1 Fabric Capacity Planning Recommendations
+
+#### 13.1.1 Capacity Sizing Calculator
 ```python
-# Implement data lineage for audit purposes
-def track_data_lineage(source_table, target_table, transformation_logic):
-    lineage_record = {
-        'source_table': source_table,
-        'target_table': target_table,
-        'transformation_date': datetime.now(),
-        'transformation_logic': transformation_logic,
-        'record_count': get_record_count(target_table),
-        'checksum': calculate_data_checksum(target_table)
-    }
-    
-    save_lineage_record(lineage_record)
-```
-
-## 11. New Deployment and Go-Live Procedures
-
-### 11.1 Phased Migration Strategies
-
-#### 11.1.1 Phase 1: Infrastructure Setup
-```yaml
-# Fabric workspace configuration
-workspace_config:
-  name: "ClaimProcessingMigration"
-  capacity: "F64"
-  region: "East US"
-  
-lakehouse_config:
-  name: "SemanticClaimsLakehouse"
-  storage_format: "Delta"
-  retention_policy: "7_years"
-  
-spark_pool_config:
-  name: "ClaimProcessingPool"
-  node_size: "Medium"
-  auto_scale:
-    min_nodes: 2
-    max_nodes: 10
-```
-
-#### 11.1.2 Phase 2: Data Migration
-```python
-# Incremental data migration strategy
-def migrate_data_incrementally(source_table, target_table, batch_size=100000):
-    max_id = get_max_migrated_id(target_table)
-    
-    while True:
-        batch_df = spark.sql(f"""
-            SELECT * FROM {source_table}
-            WHERE id > {max_id}
-            ORDER BY id
-            LIMIT {batch_size}
-        """)
-        
-        if batch_df.count() == 0:
-            break
-            
-        # Transform and load batch
-        transformed_df = transform_claim_data(batch_df)
-        transformed_df.write.format("delta").mode("append").saveAsTable(target_table)
-        
-        max_id = batch_df.agg({"id": "max"}).collect()[0][0]
-        log_migration_progress(target_table, max_id)
-```
-
-#### 11.1.3 Phase 3: Application Migration
-```python
-# Blue-green deployment strategy
-class DeploymentManager:
+class FabricCapacityCalculator:
     def __init__(self):
-        self.blue_environment = "prod_blue"
-        self.green_environment = "prod_green"
+        self.capacity_units = {
+            'F2': {'cu_per_hour': 2, 'cost_per_hour': 0.36},
+            'F4': {'cu_per_hour': 4, 'cost_per_hour': 0.72},
+            'F8': {'cu_per_hour': 8, 'cost_per_hour': 1.44},
+            'F16': {'cu_per_hour': 16, 'cost_per_hour': 2.88},
+            'F32': {'cu_per_hour': 32, 'cost_per_hour': 5.76},
+            'F64': {'cu_per_hour': 64, 'cost_per_hour': 11.52}
+        }
+    
+    def calculate_monthly_cost(self, capacity_sku, usage_hours_per_day):
+        unit_cost = self.capacity_units[capacity_sku]['cost_per_hour']
+        monthly_hours = usage_hours_per_day * 30
+        return monthly_hours * unit_cost
+    
+    def recommend_capacity(self, workload_requirements):
+        # Analyze workload and recommend appropriate capacity
+        data_volume_gb = workload_requirements['data_volume_gb']
+        concurrent_users = workload_requirements['concurrent_users']
+        processing_complexity = workload_requirements['complexity_score']
         
-    def deploy_to_green(self, application_code):
-        # Deploy new version to green environment
-        deploy_application(self.green_environment, application_code)
-        run_smoke_tests(self.green_environment)
-        
-    def switch_traffic(self):
-        # Switch traffic from blue to green
-        update_load_balancer(self.green_environment)
-        monitor_application_health()
-        
-    def rollback_if_needed(self):
-        if detect_issues():
-            update_load_balancer(self.blue_environment)
-            log_rollback_event()
+        if data_volume_gb < 100 and concurrent_users < 10:
+            return 'F2'
+        elif data_volume_gb < 500 and concurrent_users < 25:
+            return 'F8'
+        elif data_volume_gb < 2000 and concurrent_users < 50:
+            return 'F16'
+        else:
+            return 'F32'
 ```
 
-#### 11.1.4 Phase 4: Validation and Cutover
+#### 13.1.2 Cost Monitoring and Alerts
 ```python
-# Comprehensive validation before cutover
-def pre_cutover_validation():
-    validation_results = []
+# Cost monitoring implementation
+def monitor_fabric_costs():
+    current_usage = get_fabric_usage_metrics()
+    cost_threshold = get_cost_threshold()
     
-    # Data validation
-    data_validation = validate_data_integrity()
-    validation_results.append(data_validation)
+    if current_usage['daily_cost'] > cost_threshold['daily_limit']:
+        send_cost_alert({
+            'current_cost': current_usage['daily_cost'],
+            'threshold': cost_threshold['daily_limit'],
+            'recommendations': generate_cost_optimization_recommendations()
+        })
+
+def generate_cost_optimization_recommendations():
+    return [
+        'Consider pausing non-production workspaces during off-hours',
+        'Optimize data retention policies',
+        'Review and optimize Spark pool configurations',
+        'Implement data archiving for historical data'
+    ]
+```
+
+#### 13.1.3 Storage Cost Optimization
+```sql
+-- Implement data lifecycle management
+CREATE OR REPLACE TABLE claim_transactions_archived
+USING DELTA
+LOCATION '/lakehouse/archive/claim_transactions/'
+AS
+SELECT * FROM claim_transactions
+WHERE transaction_date < DATEADD(year, -2, CURRENT_DATE())
+
+-- Remove archived data from main table
+DELETE FROM claim_transactions
+WHERE transaction_date < DATEADD(year, -2, CURRENT_DATE())
+
+-- Optimize storage
+OPTIMIZE claim_transactions
+ZORDER BY (claim_id)
+```
+
+## 14. Integration and Connectivity Updates
+
+### 14.1 External System Integration Guidance
+
+#### 14.1.1 API Integration Patterns
+```python
+# REST API integration for external claim systems
+class ExternalClaimSystemConnector:
+    def __init__(self, api_endpoint, auth_token):
+        self.api_endpoint = api_endpoint
+        self.auth_token = auth_token
+        self.session = requests.Session()
+        self.session.headers.update({'Authorization': f'Bearer {auth_token}'})
     
-    # Performance validation
-    performance_validation = validate_performance_benchmarks()
-    validation_results.append(performance_validation)
+    def fetch_claim_updates(self, last_sync_timestamp):
+        params = {
+            'since': last_sync_timestamp.isoformat(),
+            'limit': 1000
+        }
+        
+        response = self.session.get(f'{self.api_endpoint}/claims/updates', params=params)
+        response.raise_for_status()
+        
+        return response.json()
     
-    # Business logic validation
-    business_validation = validate_business_rules()
-    validation_results.append(business_validation)
+    def sync_to_fabric(self, updates):
+        # Convert API response to DataFrame
+        df = spark.createDataFrame(updates)
+        
+        # Apply transformations
+        transformed_df = self.transform_external_data(df)
+        
+        # Merge with existing data
+        self.merge_claim_updates(transformed_df)
+```
+
+#### 14.1.2 Database Connectivity
+```python
+# JDBC connection for legacy systems
+def connect_to_legacy_system(connection_string, query):
+    df = spark.read \n        .format("jdbc") \n        .option("url", connection_string) \n        .option("query", query) \n        .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver") \n        .load()
     
-    # Security validation
-    security_validation = validate_security_controls()
-    validation_results.append(security_validation)
+    return df
+
+# Example usage
+legacy_claims = connect_to_legacy_system(
+    "jdbc:sqlserver://legacy-server:1433;databaseName=Claims",
+    "SELECT * FROM ClaimTransactions WHERE ModifiedDate > '2024-01-01'"
+)
+```
+
+#### 14.1.3 Event-Driven Integration
+```python
+# Event Hub integration for real-time data
+from azure.eventhub import EventHubConsumerClient
+
+def process_claim_events():
+    def on_event(partition_context, event):
+        # Process incoming claim event
+        claim_data = json.loads(event.body_as_str())
+        
+        # Transform and validate
+        processed_claim = transform_claim_event(claim_data)
+        
+        # Write to Fabric lakehouse
+        write_to_lakehouse(processed_claim)
+        
+        # Update checkpoint
+        partition_context.update_checkpoint(event)
     
-    return all(result['passed'] for result in validation_results)
+    consumer = EventHubConsumerClient.from_connection_string(
+        conn_str=EVENT_HUB_CONNECTION_STRING,
+        consumer_group="$Default",
+        eventhub_name="claim-events"
+    )
+    
+    with consumer:
+        consumer.receive(on_event=on_event)
 ```
