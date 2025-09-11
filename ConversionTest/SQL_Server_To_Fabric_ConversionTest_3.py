@@ -174,3 +174,29 @@ class ConversionTestHarness:
         """Run a single test case and return results"""
         logger.info(f"Running test case: {test_case.id} - {test_case.name}")
         warnings = []
+        
+        try:
+            # Execute SQL Server query
+            logger.info(f"Executing SQL Server query for test case {test_case.id}")
+            sql_server_df, sql_server_time = self.execute_query(
+                self.sql_server_conn, test_case.sql_server_query, test_case.parameters
+            )
+            
+            # Execute Fabric query
+            logger.info(f"Executing Fabric query for test case {test_case.id}")
+            fabric_df, fabric_time = self.execute_query(
+                self.fabric_conn, test_case.fabric_query, test_case.parameters
+            )
+            
+            # Calculate performance difference
+            if sql_server_time > 0:
+                perf_diff_percent = ((fabric_time - sql_server_time) / sql_server_time) * 100
+            else:
+                perf_diff_percent = 0
+                warnings.append("SQL Server execution time was 0, could not calculate performance difference")
+            
+            # Compare result sets
+            row_count_sql_server = len(sql_server_df)
+            row_count_fabric = len(fabric_df)
+            column_count_sql_server = len(sql_server_df.columns)
+            column_count_fabric = len(fabric_df.columns)
