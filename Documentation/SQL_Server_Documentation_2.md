@@ -1,7 +1,7 @@
 _____________________________________________
 ## *Author*: AAVA
 ## *Created on*:   
-## *Description*:   SQL Server stored procedure for processing claim transaction measures data with Microsoft Fabric migration considerations
+## *Description*:   SQL Server stored procedure for processing claim transaction measures data
 ## *Version*: 2 
 ## *Updated on*: 
 _____________________________________________
@@ -11,110 +11,269 @@ _____________________________________________
 ## 1. Overview of Program
 
 ### Purpose of the SQL Server Code
-The stored procedure `uspSemanticClaimTransactionMeasuresData` is designed to process and transform claim transaction data for the semantic layer in a data warehouse environment. It extracts, transforms, and loads claim transaction measures data, calculating various financial metrics related to insurance claims such as paid amounts, incurred amounts, reserves, and recoveries across different categories (indemnity, medical, expense, etc.).
+The stored procedure `uspSemanticClaimTransactionMeasuresData` is designed to process and transform insurance claim transaction data for the semantic layer in a data warehouse environment. It extracts raw claim transaction data from source tables, applies complex business rules to calculate various financial metrics, and loads the results into the semantic layer for business reporting and analysis. The procedure handles multiple financial categories related to insurance claims including paid amounts, incurred amounts, reserves, and recoveries across different claim types (indemnity, medical, expense, employer liability, and legal).
 
 ### Alignment with Enterprise Data Warehousing and Analytics
 This implementation aligns with enterprise data warehousing principles by:
 - Centralizing complex transformation logic in a single, maintainable stored procedure
-- Supporting the semantic layer which provides business-friendly data access
-- Implementing incremental processing based on date ranges
+- Supporting the semantic layer which provides business-friendly data access and standardized metrics
+- Implementing incremental processing based on date ranges to optimize performance
 - Maintaining data lineage and audit information through hash values and revision tracking
-- Supporting historical data analysis through effective dating
+- Supporting historical data analysis through effective dating and versioning
+- Enabling consistent financial reporting across the organization
 
 ### Business Problem and Benefits
-The procedure addresses the business need to transform raw insurance claim transaction data into standardized financial measures that can be used for:
-- Financial analysis and reporting of insurance claims
-- Performance monitoring of claims processing
-- Risk assessment and management
-- Regulatory compliance and reporting
+The procedure addresses several critical business needs in insurance claims processing:
 
-Benefits include:
-- Standardized calculation of claim financial metrics
-- Improved data quality and consistency
-- Efficient incremental processing of claim data
-- Enhanced reporting capabilities for business users
-- Support for historical analysis through versioning
+**Business Problems:**
+- Need for standardized financial metrics across different claim types and categories
+- Requirement to track claim financial changes over time
+- Need to support complex financial analysis and reporting
+- Ensuring data consistency for regulatory compliance reporting
+- Managing large volumes of transaction data efficiently
+
+**Benefits:**
+- Standardized calculation of claim financial metrics using consistent business rules
+- Improved data quality and consistency through centralized transformation logic
+- Efficient incremental processing of claim data to minimize system load
+- Enhanced reporting capabilities with pre-calculated financial measures
+- Support for historical analysis through versioning and effective dating
+- Reduced development time for downstream reporting applications
+- Better decision-making through reliable financial metrics
 
 ### High-Level Summary of SQL Server Components
 - **Stored Procedures**: The main component is the `uspSemanticClaimTransactionMeasuresData` stored procedure
-- **Tables**: References multiple source tables including fact tables (FactClaimTransactionLineWC) and dimension tables
-- **Temporary Tables**: Creates several temporary tables for intermediate processing
-- **Dynamic SQL**: Uses dynamic SQL generation for measure calculations
-- **Indexes**: Manages indexes for performance optimization
+- **Tables**: 
+  - Source tables: EDSWH.dbo.FactClaimTransactionLineWC, EDSWH.dbo.dimClaimTransactionWC
+  - Dimension tables: Semantic.ClaimTransactionDescriptors, Semantic.ClaimDescriptors, Semantic.PolicyDescriptors, Semantic.PolicyRiskStateDescriptors
+  - Target table: Semantic.ClaimTransactionMeasures
+- **Temporary Tables**: Creates several temporary tables (##CTM, ##CTMFact, ##CTMF, ##CTPrs, ##PRDCLmTrans) for intermediate processing
+- **Dynamic SQL**: Uses dynamic SQL generation for flexible measure calculations
+- **Indexes**: Manages indexes for performance optimization during bulk operations
+- **Hash Functions**: Uses SHA2_512 for change detection and data integrity
 
 ## 2. Code Structure and Design
 
 ### Structure of the SQL Server Code
-The stored procedure follows a structured approach:
-1. Parameter declarations (`@pJobStartDateTime`, `@pJobEndDateTime`)
-2. Variable declarations for temporary table names and processing
-3. Index management for performance optimization
-4. Dynamic SQL generation for measure calculations
-5. Multi-step data processing using temporary tables
-6. Hash value generation for change detection
-7. Final result set generation with audit information
+The stored procedure follows a well-structured approach with distinct processing phases:
+
+1. **Initialization Phase**:
+   - Parameter declarations (`@pJobStartDateTime`, `@pJobEndDateTime`)
+   - Variable declarations for temporary table names and processing
+   - Special handling for default date parameters
+
+2. **Performance Optimization Phase**:
+   - Index management (disabling indexes for bulk operations)
+   - Creation of temporary tables for intermediate processing
+
+3. **Data Extraction Phase**:
+   - Retrieval of policy risk state information with row number filtering
+   - Extraction of claim transaction data with date-based filtering
+
+4. **Transformation Phase**:
+   - Dynamic SQL generation for measure calculations based on rules
+   - Joining of fact and dimension tables
+   - Application of business rules for financial calculations
+
+5. **Change Detection Phase**:
+   - Hash value generation for change detection
+   - Comparison with existing data to identify inserts and updates
+
+6. **Result Generation Phase**:
+   - Final result set generation with audit information
+   - Output of transformed data
 
 ### Key Components
-- **DDL**: Creates temporary tables for intermediate processing
-- **DML**: Uses SELECT, INSERT operations for data transformation
-- **Joins**: Multiple INNER and LEFT joins between fact and dimension tables
-- **Indexing**: Disables and rebuilds indexes for performance optimization
-- **Dynamic SQL**: Generates SQL statements dynamically for measure calculations
-- **Hash Functions**: Uses SHA2_512 for change detection
+- **DDL Operations**: 
+  - Creates multiple temporary tables for intermediate processing
+  - Manages index states for performance optimization
+
+- **DML Operations**: 
+  - Uses SELECT INTO for temporary table population
+  - Complex SELECT statements with multiple joins
+  - Uses Common Table Expressions (CTEs) for intermediate results
+
+- **Joins**: 
+  - Multiple INNER JOINs between fact and dimension tables
+  - LEFT JOINs for optional relationships
+  - Hash-based joins for performance
+
+- **Indexing**: 
+  - Disables and rebuilds indexes for performance optimization during bulk operations
+  - Uses multiple indexes on key fields for query performance
+
+- **Dynamic SQL**: 
+  - Generates SQL statements dynamically for measure calculations
+  - Uses string aggregation for building complex SQL statements
 
 ### Primary SQL Server Components
 - **Tables**: 
-  - Source: EDSWH.dbo.FactClaimTransactionLineWC, Semantic.ClaimTransactionDescriptors, Semantic.ClaimDescriptors, Semantic.PolicyDescriptors, Semantic.PolicyRiskStateDescriptors
+  - Source: EDSWH.dbo.FactClaimTransactionLineWC, EDSWH.dbo.dimClaimTransactionWC
+  - Dimension: Semantic.ClaimTransactionDescriptors, Semantic.ClaimDescriptors, Semantic.PolicyDescriptors, Semantic.PolicyRiskStateDescriptors, EDSWH.dbo.dimBrand
   - Target: Semantic.ClaimTransactionMeasures
-- **Temporary Tables**: ##CTM, ##CTMFact, ##CTMF, ##CTPrs, ##PRDCLmTrans
-- **Dynamic SQL**: Used for generating measure calculations
-- **CTEs**: Used for change detection and filtering
+  - Rules: Rules.SemanticLayerMetaData (for dynamic measure generation)
+
+- **Temporary Tables**: 
+  - ##CTM - Main temporary table for transformed data
+  - ##CTMFact - Temporary table for fact data
+  - ##CTMF - Final temporary table with change detection
+  - ##CTPrs - Temporary table for policy risk state data
+  - ##PRDCLmTrans - Temporary table for existing production data
+
+- **Dynamic SQL**: 
+  - Used for generating measure calculations based on rules
+  - Builds complex SQL statements dynamically
+
+- **CTEs**: 
+  - Used for change detection and filtering
+  - Implements row numbering for latest record selection
 
 ### Dependencies and Performance Tuning
-- Dependencies on dimension and fact tables in the EDSMart database
-- Index management for performance optimization
-- Use of temporary tables for intermediate results
-- Hash-based change detection for efficient updates
-- Row number functions for filtering latest records
+- **Dependencies**:
+  - Relies on Rules.SemanticLayerMetaData for dynamic measure generation
+  - Depends on dimension and fact tables in the EDSMart database
+  - Requires specific table structure and relationships
+
+- **Performance Tuning**:
+  - Index management for bulk operations
+  - Use of temporary tables for intermediate results
+  - Hash-based change detection for efficient updates
+  - Row number functions for filtering latest records
+  - Dynamic SQL for optimized measure calculations
+  - Incremental processing based on date parameters
 
 ## 3. Data Flow and Processing Logic
 
 ### Data Flow
-1. Source data is extracted from FactClaimTransactionLineWC and related dimension tables
-2. Data is filtered based on job date parameters
-3. Policy risk state information is retrieved and filtered to get the latest records
-4. Claim transaction data is joined with descriptors and policy information
-5. Measures are calculated using dynamically generated SQL
-6. Hash values are generated for change detection
-7. Results are compared with existing data to identify inserts and updates
-8. Final result set is generated with audit information
+1. **Source Data Extraction**:
+   - Claim transaction data is extracted from FactClaimTransactionLineWC and related dimension tables
+   - Data is filtered based on job date parameters for incremental processing
+   - Policy risk state information is retrieved and filtered to get the latest records
+
+2. **Data Transformation**:
+   - Claim transaction data is joined with descriptors and policy information
+   - Financial measures are calculated using dynamically generated SQL based on rules
+   - Additional fields are derived including source system identifiers
+
+3. **Change Detection**:
+   - Hash values are generated for each record using SHA2_512
+   - Results are compared with existing data to identify inserts and updates
+   - Audit information is added including operation type and timestamps
+
+4. **Result Generation**:
+   - Final result set is generated with all calculated measures and audit information
+   - Only new or changed records are included in the output
 
 ### Source and Destination Tables
 
 **Source Tables and Fields:**
-- EDSWH.dbo.FactClaimTransactionLineWC (FactClaimTransactionLineWCKey, RevisionNumber, PolicyWCKey, ClaimWCKey, etc.)
-- Semantic.ClaimTransactionDescriptors (ClaimTransactionLineCategoryKey, ClaimTransactionWCKey, etc.)
-- Semantic.ClaimDescriptors (ClaimWCKey, EmploymentLocationState, JurisdictionState, etc.)
-- Semantic.PolicyDescriptors (PolicyWCKey, BrandKey, etc.)
-- Semantic.PolicyRiskStateDescriptors (PolicyRiskStateWCKey, PolicyWCKey, RiskState, etc.)
+- **EDSWH.dbo.FactClaimTransactionLineWC**:
+  - FactClaimTransactionLineWCKey (PK)
+  - RevisionNumber
+  - PolicyWCKey (FK)
+  - ClaimWCKey (FK)
+  - ClaimTransactionLineCategoryKey (FK)
+  - ClaimTransactionWCKey (FK)
+  - ClaimCheckKey (FK)
+  - SourceTransactionLineItemCreateDate
+  - SourceTransactionLineItemCreateDateKey
+  - SourceSystem
+  - RecordEffectiveDate
+  - TransactionAmount
+  - RetiredInd
+
+- **EDSWH.dbo.dimClaimTransactionWC**:
+  - ClaimTransactionWCKey (PK)
+  - LoadUpdateDate
+
+- **Semantic.ClaimTransactionDescriptors**:
+  - ClaimTransactionLineCategoryKey (PK)
+  - ClaimTransactionWCKey (PK)
+  - ClaimWCKey (PK)
+  - SourceTransactionCreateDate
+  - TransactionSubmitDate
+
+- **Semantic.ClaimDescriptors**:
+  - ClaimWCKey (PK)
+  - EmploymentLocationState
+  - JurisdictionState
+
+- **Semantic.PolicyDescriptors**:
+  - PolicyWCKey (PK)
+  - AgencyKey (FK)
+  - BrandKey (FK)
+
+- **Semantic.PolicyRiskStateDescriptors**:
+  - PolicyRiskStateWCKey (PK)
+  - PolicyWCKey (FK)
+  - RiskState
+  - RiskStateEffectiveDate
+  - RecordEffectiveDate
+  - RetiredInd
+
+- **Rules.SemanticLayerMetaData**:
+  - SourceType
+  - Measure_Name
+  - Logic
 
 **Destination Table and Fields:**
-- Semantic.ClaimTransactionMeasures (FactClaimTransactionLineWCKey, RevisionNumber, PolicyWCKey, PolicyRiskStateWCKey, ClaimWCKey, etc.)
+- **Semantic.ClaimTransactionMeasures**:
+  - FactClaimTransactionLineWCKey (PK)
+  - RevisionNumber (PK)
+  - PolicyWCKey
+  - PolicyRiskStateWCKey
+  - ClaimWCKey
+  - ClaimTransactionLineCategoryKey
+  - ClaimTransactionWCKey
+  - ClaimCheckKey
+  - AgencyKey
+  - SourceClaimTransactionCreateDate
+  - SourceClaimTransactionCreateDateKey
+  - TransactionCreateDate
+  - TransactionSubmitDate
+  - SourceSystem
+  - RecordEffectiveDate
+  - SourceSystemIdentifier
+  - Multiple financial measures (NetPaidIndemnity, GrossIncurredLoss, etc.)
+  - TransactionAmount
+  - RetiredInd
+  - HashValue
+  - InsertUpdates
+  - AuditOperations
+  - LoadUpdateDate
+  - LoadCreateDate
 
 ### Transformations
-- **Filtering**: Excludes retired records and filters based on date parameters
-- **Joins**: Connects claim transactions to descriptors, policies, and risk states
-- **Aggregations**: Calculates various financial measures
-- **Field Calculations**: Derives financial metrics like NetPaidIndemnity, GrossIncurredLoss, etc.
-- **Hash Value Generation**: Creates hash values for change detection
-- **Audit Information**: Adds audit fields like InsertUpdates, AuditOperations, LoadUpdateDate, LoadCreateDate
+- **Filtering**:
+  - Excludes retired records (RetiredInd = 1) from policy risk state data
+  - Filters based on job date parameters for incremental processing
+  - Uses row numbering to select only the latest policy risk state records
+
+- **Joins**:
+  - Connects claim transactions to descriptors, policies, and risk states
+  - Uses appropriate join types (INNER, LEFT) based on relationship requirements
+
+- **Field Calculations**:
+  - Derives SourceSystemIdentifier using CONCAT_WS function
+  - Applies COALESCE for handling NULL values
+  - Dynamically generates financial measure calculations based on rules
+
+- **Hash Value Generation**:
+  - Creates SHA2_512 hash values for change detection
+  - Concatenates all relevant fields for comprehensive change detection
+
+- **Audit Information**:
+  - Adds InsertUpdates flag (1 for insert, 0 for update, 3 for unchanged)
+  - Adds AuditOperations text ('Inserted', 'Updated', NULL)
+  - Sets LoadUpdateDate to current timestamp
+  - Preserves or sets LoadCreateDate appropriately
 
 ## 4. Data Mapping
 
 | Target Table Name | Target Column Name | Source Table Name | Source Column Name | Remarks |
 |-------------------|-------------------|-------------------|-------------------|----------|
-| ClaimTransactionMeasures | FactClaimTransactionLineWCKey | FactClaimTransactionLineWC | FactClaimTransactionLineWCKey | 1:1 mapping |
-| ClaimTransactionMeasures | RevisionNumber | FactClaimTransactionLineWC | RevisionNumber | 1:1 mapping with COALESCE(RevisionNumber, 0) |
+| ClaimTransactionMeasures | FactClaimTransactionLineWCKey | FactClaimTransactionLineWC | FactClaimTransactionLineWCKey | 1:1 mapping, Primary Key |
+| ClaimTransactionMeasures | RevisionNumber | FactClaimTransactionLineWC | RevisionNumber | COALESCE(RevisionNumber, 0), Part of composite key |
 | ClaimTransactionMeasures | PolicyWCKey | FactClaimTransactionLineWC | PolicyWCKey | 1:1 mapping |
 | ClaimTransactionMeasures | PolicyRiskStateWCKey | PolicyRiskStateDescriptors | PolicyRiskStateWCKey | Joined using PolicyWCKey and RiskState, COALESCE(PolicyRiskStateWCKey, -1) |
 | ClaimTransactionMeasures | ClaimWCKey | FactClaimTransactionLineWC | ClaimWCKey | 1:1 mapping |
@@ -122,8 +281,8 @@ The stored procedure follows a structured approach:
 | ClaimTransactionMeasures | ClaimTransactionWCKey | FactClaimTransactionLineWC | ClaimTransactionWCKey | 1:1 mapping |
 | ClaimTransactionMeasures | ClaimCheckKey | FactClaimTransactionLineWC | ClaimCheckKey | 1:1 mapping |
 | ClaimTransactionMeasures | AgencyKey | PolicyDescriptors | AgencyKey | Joined using PolicyWCKey, COALESCE(AgencyKey, -1) |
-| ClaimTransactionMeasures | SourceClaimTransactionCreateDate | FactClaimTransactionLineWC | SourceTransactionLineItemCreateDate | 1:1 mapping |
-| ClaimTransactionMeasures | SourceClaimTransactionCreateDateKey | FactClaimTransactionLineWC | SourceTransactionLineItemCreateDateKey | 1:1 mapping |
+| ClaimTransactionMeasures | SourceClaimTransactionCreateDate | FactClaimTransactionLineWC | SourceTransactionLineItemCreateDate | 1:1 mapping with renamed column |
+| ClaimTransactionMeasures | SourceClaimTransactionCreateDateKey | FactClaimTransactionLineWC | SourceTransactionLineItemCreateDateKey | 1:1 mapping with renamed column |
 | ClaimTransactionMeasures | TransactionCreateDate | ClaimTransactionDescriptors | SourceTransactionCreateDate | Joined using multiple keys |
 | ClaimTransactionMeasures | TransactionSubmitDate | ClaimTransactionDescriptors | TransactionSubmitDate | Joined using multiple keys |
 | ClaimTransactionMeasures | SourceSystem | FactClaimTransactionLineWC | SourceSystem | 1:1 mapping |
@@ -131,153 +290,122 @@ The stored procedure follows a structured approach:
 | ClaimTransactionMeasures | SourceSystemIdentifier | FactClaimTransactionLineWC | FactClaimTransactionLineWCKey, RevisionNumber | Derived using CONCAT_WS('~', FactClaimTransactionLineWCKey, RevisionNumber) |
 | ClaimTransactionMeasures | TransactionAmount | FactClaimTransactionLineWC | TransactionAmount | 1:1 mapping |
 | ClaimTransactionMeasures | RetiredInd | FactClaimTransactionLineWC | RetiredInd | 1:1 mapping |
-| ClaimTransactionMeasures | Various financial measures | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
-| ClaimTransactionMeasures | HashValue | N/A | N/A | Generated using SHA2_512 hash of concatenated values |
-| ClaimTransactionMeasures | InsertUpdates | N/A | N/A | Derived based on existence and hash comparison |
-| ClaimTransactionMeasures | AuditOperations | N/A | N/A | Derived based on InsertUpdates value |
-| ClaimTransactionMeasures | LoadUpdateDate | N/A | N/A | Set to GETDATE() |
-| ClaimTransactionMeasures | LoadCreateDate | ClaimTransactionMeasures | LoadCreateDate | COALESCE(existing LoadCreateDate, GETDATE()) |
+| ClaimTransactionMeasures | NetPaidIndemnity | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | NetPaidMedical | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | NetPaidExpense | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | NetPaidEmployerLiability | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | NetPaidLegal | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | NetPaidLoss | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | NetPaidLossAndExpense | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | NetIncurredIndemnity | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | NetIncurredMedical | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | NetIncurredExpense | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | NetIncurredEmployerLiability | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | NetIncurredLegal | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | NetIncurredLoss | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | NetIncurredLossAndExpense | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | ReservesIndemnity | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | ReservesMedical | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | ReservesExpense | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | ReservesEmployerLiability | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | ReservesLegal | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | ReservesLoss | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | ReservesLossAndExpense | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | GrossPaidIndemnity | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | GrossPaidMedical | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | GrossPaidExpense | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | GrossPaidEmployerLiability | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | GrossPaidLegal | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | GrossPaidLoss | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | GrossPaidLossAndExpense | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | GrossIncurredIndemnity | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | GrossIncurredMedical | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | GrossIncurredExpense | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | GrossIncurredEmployerLiability | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | GrossIncurredLegal | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | GrossIncurredLoss | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | GrossIncurredLossAndExpense | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | RecoveryIndemnity | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | RecoveryMedical | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | RecoveryExpense | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | RecoveryEmployerLiability | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | RecoveryLegal | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | RecoveryDeductible | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | RecoveryOverpayment | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | RecoverySubrogation | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | RecoveryApportionmentContribution | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | RecoverySecondInjuryFund | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | RecoveryLoss | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | RecoveryLossAndExpense | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules |
+| ClaimTransactionMeasures | RecoveryNonSubroNonSecondInjuryFundEmployerLiability | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules, added in v0.5 |
+| ClaimTransactionMeasures | RecoveryNonSubroNonSecondInjuryFundExpense | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules, added in v0.5 |
+| ClaimTransactionMeasures | RecoveryNonSubroNonSecondInjuryFundIndemnity | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules, added in v0.5 |
+| ClaimTransactionMeasures | RecoveryNonSubroNonSecondInjuryFundLegal | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules, added in v0.5 |
+| ClaimTransactionMeasures | RecoveryNonSubroNonSecondInjuryFundMedical | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules, added in v0.5 |
+| ClaimTransactionMeasures | RecoveryDeductibleEmployerLiability | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules, added in v0.7 |
+| ClaimTransactionMeasures | RecoveryDeductibleExpense | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules, added in v0.7 |
+| ClaimTransactionMeasures | RecoveryDeductibleIndemnity | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules, added in v0.7 |
+| ClaimTransactionMeasures | RecoveryDeductibleMedical | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules, added in v0.7 |
+| ClaimTransactionMeasures | RecoveryDeductibleLegal | Rules.SemanticLayerMetaData | Logic | Dynamically generated based on rules, added in v0.7 |
+| ClaimTransactionMeasures | HashValue | N/A | N/A | Generated using SHA2_512 hash of concatenated values for change detection |
+| ClaimTransactionMeasures | InsertUpdates | N/A | N/A | Derived flag: 1=insert, 0=update, 3=unchanged |
+| ClaimTransactionMeasures | AuditOperations | N/A | N/A | Derived text: 'Inserted', 'Updated', or NULL |
+| ClaimTransactionMeasures | LoadUpdateDate | N/A | N/A | Set to GETDATE() for current processing timestamp |
+| ClaimTransactionMeasures | LoadCreateDate | ClaimTransactionMeasures | LoadCreateDate | COALESCE(existing LoadCreateDate, GETDATE()) to preserve original creation date |
 
 ## 5. Complexity Analysis
 
 | Category | Measurement |
 |----------|-------------|
-| Number of Lines | Approximately 350 lines |
-| Tables Used | 5-6 tables (FactClaimTransactionLineWC, ClaimTransactionDescriptors, ClaimDescriptors, PolicyDescriptors, PolicyRiskStateDescriptors, SemanticLayerMetaData) |
-| Joins | 5-6 joins (INNER JOIN, LEFT JOIN) |
+| Number of Lines | 350+ lines of SQL code |
+| Tables Used | 7 tables (FactClaimTransactionLineWC, dimClaimTransactionWC, ClaimTransactionDescriptors, ClaimDescriptors, PolicyDescriptors, PolicyRiskStateDescriptors, dimBrand) |
+| Joins | 6+ joins (4 INNER JOINs, 3 LEFT JOINs) |
 | Temporary Tables | 5 temporary tables (##CTM, ##CTMFact, ##CTMF, ##CTPrs, ##PRDCLmTrans) |
 | Aggregate Functions | Multiple, dynamically generated from Rules.SemanticLayerMetaData |
-| DML Statements | Multiple SELECT statements, no explicit INSERT/UPDATE/DELETE |
-| Conditional Logic | Multiple CASE statements, IF-ELSE blocks |
-| Query Complexity | High - Dynamic SQL, multiple joins, CTEs, and subqueries |
-| Performance Considerations | Index management, temporary tables, hash-based change detection |
-| Data Volume Handling | Designed for processing large volumes of claim transaction data |
-| Dependency Complexity | High - Depends on multiple source tables and Rules.SemanticLayerMetaData |
-| Overall Complexity Score | 80/100 (High complexity due to dynamic SQL, multiple transformations, and performance optimizations) |
+| DML Statements | Multiple SELECT statements with complex joins, 1 dynamic INSERT via SELECT INTO |
+| Conditional Logic | Multiple CASE statements for InsertUpdates and AuditOperations, IF-ELSE blocks for parameter handling and index management |
+| Query Complexity | Very High - Dynamic SQL generation, multiple joins, CTEs, subqueries, and complex transformations |
+| Performance Considerations | Index management for bulk operations, temporary tables for intermediate results, hash-based change detection, row numbering for filtering |
+| Data Volume Handling | Designed for processing large volumes of claim transaction data with incremental processing based on date parameters |
+| Dependency Complexity | High - Depends on Rules.SemanticLayerMetaData for dynamic measure generation, multiple source tables with specific relationships |
+| Overall Complexity Score | 85/100 (Very High complexity due to dynamic SQL generation, complex transformations, performance optimizations, and extensive error handling) |
 
 ## 6. Key Outputs
 
 ### Final Outputs
 - **Table**: Populated Semantic.ClaimTransactionMeasures with transformed and enriched claim transaction measures
 - **Result Set**: Returns the final result set with all calculated measures and audit information
+- **Audit Trail**: Provides detailed audit information including operation type and timestamps
 
 ### Business Goal Alignment
-- Supports financial reporting requirements for insurance claims
-- Enables trend analysis of claims processing and financial impact
-- Provides standardized metrics for risk assessment and management
-- Supports compliance reporting requirements
-- Enables data-driven decision making for claims management
+The outputs of this stored procedure directly support several critical business needs:
+
+1. **Financial Reporting**:
+   - Provides standardized financial metrics for insurance claims
+   - Enables consistent reporting across different business units
+   - Supports regulatory compliance reporting requirements
+
+2. **Performance Analysis**:
+   - Allows tracking of claim costs over time
+   - Enables analysis of claim settlement efficiency
+   - Supports identification of cost trends and patterns
+
+3. **Risk Management**:
+   - Provides data for risk assessment and pricing models
+   - Enables analysis of claim severity and frequency
+   - Supports reserve adequacy analysis
+
+4. **Operational Efficiency**:
+   - Centralizes complex calculations to reduce redundant processing
+   - Provides pre-calculated metrics for downstream applications
+   - Improves data consistency across reporting systems
 
 ### Storage Format
 - **Production Table**: Permanent table in the semantic layer (Semantic.ClaimTransactionMeasures) for long-term storage
 - **Dimensional Model**: Follows a star schema design with measures and dimension keys
-- **Versioning**: Supports versioning through RevisionNumber
-- **Audit Information**: Includes audit fields for tracking changes
-
-## 7. Microsoft Fabric Migration Considerations
-
-### SQL Server to Fabric Feature Mapping
-
-| SQL Server Feature | Microsoft Fabric Equivalent | Migration Approach |
-|-------------------|----------------------------|--------------------|
-| Stored Procedure | Notebook with SQL/Python/Spark | Convert procedure logic to notebook with appropriate language |
-| Temporary Tables | Spark DataFrames or Delta Tables | Replace temporary tables with DataFrames or temporary Delta tables |
-| Dynamic SQL | String interpolation in Python/Scala | Convert dynamic SQL to string manipulation in chosen language |
-| Hash Functions | Built-in hash functions in Spark | Use Spark's built-in hash functions or UDFs |
-| Index Management | Delta Lake optimizations | Use Delta Lake's optimization features instead of explicit index management |
-| COALESCE | Same function available in Spark SQL | Direct replacement |
-| ROW_NUMBER() | Window functions in Spark SQL | Direct replacement |
-| CONCAT_WS | Same function available in Spark SQL | Direct replacement |
-| CASE statements | CASE or WHEN in Spark SQL | Direct replacement |
-
-### Data Type Mapping
-
-| SQL Server Data Type | Microsoft Fabric Data Type | Notes |
-|---------------------|--------------------------|-------|
-| datetime2 | timestamp | Compatible conversion |
-| varchar | string | Compatible conversion |
-| bigint | long | Compatible conversion |
-| int | integer | Compatible conversion |
-| bit | boolean | Compatible conversion |
-| decimal | decimal | May need precision/scale adjustments |
-| nvarchar | string | Character encoding differences to consider |
-
-### Performance Optimization Differences
-
-| SQL Server Approach | Microsoft Fabric Approach | Considerations |
-|---------------------|--------------------------|---------------|
-| Index management | Partition pruning and Delta Lake optimizations | Replace explicit index management with Fabric-specific optimizations |
-| Temporary tables | Spark caching and persistence | Use DataFrame caching instead of temporary tables |
-| Query hints | Spark configurations | Replace SQL Server query hints with appropriate Spark configurations |
-| Statistics updates | Delta Lake statistics | Use Delta Lake's statistics collection instead of SQL Server statistics |
-| Execution plans | Spark execution plans | Monitor and optimize using Spark's execution plan visualization |
-
-### Implementation Challenges
-
-#### 1. Dynamic SQL Generation
-The stored procedure uses dynamic SQL to generate measure calculations based on rules stored in the SemanticLayerMetaData table. In Fabric:
-- **Challenge**: Dynamic SQL execution is handled differently in Fabric.
-- **Solution**: Use string interpolation in Python/Scala to build queries or use Spark's programmatic DataFrame API to build transformations dynamically.
-
-#### 2. Temporary Tables
-The procedure heavily uses temporary tables for intermediate processing:
-- **Challenge**: Global temporary tables (##) don't exist in Fabric.
-- **Solution**: Replace with Spark DataFrames or temporary Delta tables with appropriate caching strategies.
-
-#### 3. Transaction Management
-SQL Server's transaction handling doesn't directly translate to Fabric:
-- **Challenge**: XACT_ABORT and transaction control statements aren't available.
-- **Solution**: Use Delta Lake's ACID transaction capabilities and implement appropriate error handling.
-
-#### 4. Row-by-Row Processing
-Some operations might be implemented as row-by-row processing in SQL Server:
-- **Challenge**: Row-by-row processing is inefficient in Fabric.
-- **Solution**: Refactor to use set-based operations that work well with Spark's distributed processing model.
-
-#### 5. System Functions and Variables
-The procedure uses SQL Server-specific system functions and variables:
-- **Challenge**: Functions like @@spid aren't available in Fabric.
-- **Solution**: Replace with Fabric-specific approaches or session management.
-
-### Recommended Migration Approach
-
-1. **Data Layer Migration**:
-   - Migrate source tables to Delta tables in Fabric
-   - Maintain similar schema structure but optimize for Fabric performance
-   - Consider partitioning strategies based on date ranges for large tables
-
-2. **Processing Logic Migration**:
-   - Convert the stored procedure to a Spark SQL notebook or Python/Scala notebook
-   - Replace temporary tables with DataFrames or temporary Delta tables
-   - Refactor dynamic SQL to use string interpolation or DataFrame operations
-   - Implement appropriate error handling and logging
-
-3. **Performance Optimization**:
-   - Use Delta Lake's optimization features instead of explicit index management
-   - Implement appropriate caching strategies for frequently accessed data
-   - Leverage Fabric's distributed processing capabilities for large-scale data
-
-4. **Testing and Validation**:
-   - Implement comprehensive testing to ensure data consistency
-   - Compare results between SQL Server and Fabric implementations
-   - Monitor performance and optimize as needed
-
-### Fabric-Specific Enhancements
-
-1. **Scalability Improvements**:
-   - Leverage Fabric's distributed processing for better scalability
-   - Implement partitioning strategies for large tables
-   - Use Delta Lake's optimization features for improved query performance
-
-2. **Integration Capabilities**:
-   - Connect with other Fabric services for enhanced analytics
-   - Integrate with Power BI for visualization
-   - Leverage Azure Synapse Link for real-time analytics
-
-3. **Advanced Analytics**:
-   - Extend the solution with machine learning capabilities
-   - Implement predictive analytics for claims processing
-   - Use Fabric's AI capabilities for anomaly detection
+- **Versioning**: Supports versioning through RevisionNumber and effective dating
+- **Audit Information**: Includes comprehensive audit fields for tracking changes
+- **Change Detection**: Uses hash values for efficient change detection
 
 ## API Cost
 API cost for this documentation: $0.00
