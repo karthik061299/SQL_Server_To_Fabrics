@@ -241,3 +241,61 @@ class DataQualityValidator:
     def get_quality_issues(self) -> List[str]:
         """Get all identified quality issues"""
         return self.quality_issues
+
+class StatisticalAnalyzer:
+    """Advanced statistical analysis for data comparison"""
+    
+    def __init__(self, logger):
+        self.logger = logger
+    
+    def compare_distributions(self, df1: pd.DataFrame, df2: pd.DataFrame, 
+                            numeric_columns: List[str]) -> Dict[str, Any]:
+        """Compare statistical distributions between datasets"""
+        self.logger.info("Starting statistical distribution comparison")
+        
+        comparison_results = {}
+        
+        for col in numeric_columns:
+            if col in df1.columns and col in df2.columns:
+                try:
+                    # Remove null values
+                    data1 = df1[col].dropna()
+                    data2 = df2[col].dropna()
+                    
+                    if len(data1) > 0 and len(data2) > 0:
+                        # Kolmogorov-Smirnov test
+                        ks_stat, ks_pvalue = stats.ks_2samp(data1, data2)
+                        
+                        # Mann-Whitney U test
+                        mw_stat, mw_pvalue = stats.mannwhitneyu(data1, data2, alternative='two-sided')
+                        
+                        # Descriptive statistics
+                        desc_stats = {
+                            'source1': {
+                                'mean': float(data1.mean()),
+                                'median': float(data1.median()),
+                                'std': float(data1.std()),
+                                'min': float(data1.min()),
+                                'max': float(data1.max())
+                            },
+                            'source2': {
+                                'mean': float(data2.mean()),
+                                'median': float(data2.median()),
+                                'std': float(data2.std()),
+                                'min': float(data2.min()),
+                                'max': float(data2.max())
+                            }
+                        }
+                        
+                        comparison_results[col] = {
+                            'ks_test': {'statistic': float(ks_stat), 'p_value': float(ks_pvalue)},
+                            'mannwhitney_test': {'statistic': float(mw_stat), 'p_value': float(mw_pvalue)},
+                            'descriptive_stats': desc_stats,
+                            'distributions_similar': ks_pvalue > 0.05 and mw_pvalue > 0.05
+                        }
+                        
+                except Exception as e:
+                    self.logger.error(f"Statistical comparison failed for column {col}: {str(e)}")
+                    comparison_results[col] = {'error': str(e)}
+        
+        return comparison_results
