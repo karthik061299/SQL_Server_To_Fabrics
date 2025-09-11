@@ -367,3 +367,29 @@ class SQLServerToFabricReconTest:
             self.logger.error(f"Error executing Fabric query: {str(e)}")
             self.results['errors'].append(f"Fabric execution error: {str(e)}")
             return pd.DataFrame()
+    
+    def compare_datasets(self, sql_server_df: pd.DataFrame, fabric_df: pd.DataFrame) -> Dict:
+        """
+        Compare SQL Server and Fabric datasets
+        
+        Args:
+            sql_server_df (pd.DataFrame): SQL Server results
+            fabric_df (pd.DataFrame): Fabric results
+            
+        Returns:
+            Dict: Comparison results
+        """
+        comparison_results = {
+            'row_count_match': False,
+            'column_count_match': False,
+            'schema_match': False,
+            'data_match': False,
+            'sql_server_rows': len(sql_server_df),
+            'fabric_rows': len(fabric_df),
+            'sql_server_columns': len(sql_server_df.columns) if not sql_server_df.empty else 0,
+            'fabric_columns': len(fabric_df.columns) if not fabric_df.empty else 0,
+            'missing_in_fabric': [],
+            'missing_in_sql_server': [],
+            'data_differences': [],
+            'hash_comparison': {}
+        }
