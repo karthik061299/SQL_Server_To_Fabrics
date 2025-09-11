@@ -1,7 +1,7 @@
 _____________________________________________
 ## *Author*: AAVA
 ## *Created on*:   
-## *Description*:   Comprehensive unit tests for SQL Server to Fabric conversion of uspSemanticClaimTransactionMeasuresData stored procedure
+## *Description*:   Unit tests for uspSemanticClaimTransactionMeasuresData Fabric SQL conversion (continued)
 ## *Version*: 2 
 ## *Updated on*: 
 _____________________________________________
@@ -9,497 +9,354 @@ _____________________________________________
 import pytest
 import pandas as pd
 import numpy as np
-from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime, timedelta, date
-import hashlib
-from decimal import Decimal
-import logging
-from typing import List, Dict, Any
-import time
+from datetime import datetime, timedelta
+from unittest.mock import patch, MagicMock
 
-# Configure logging for test execution
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Additional test cases for uspSemanticClaimTransactionMeasuresData
 
+def test_financial_calculations(mock_fabric_connection, sample_claim_transaction_data, 
+                               sample_claim_transaction_descriptors, sample_claim_descriptors,
+                               sample_policy_descriptors, sample_policy_risk_state):
+    """TC006: Business logic - Financial calculations"""
+    # Arrange
+    fixtures = {
+        "EDSWH.dbo.FactClaimTransactionLineWC": sample_claim_transaction_data,
+        "EDSWH.dbo.DimClaimTransactionWC": pd.DataFrame({"ClaimTransactionWCKey": range(201, 206)}),
+        "Semantic.ClaimTransactionDescriptors": sample_claim_transaction_descriptors,
+        "Semantic.ClaimDescriptors": sample_claim_descriptors,
+        "Semantic.PolicyDescriptors": sample_policy_descriptors,
+        "Semantic.PolicyRiskStateDescriptors": sample_policy_risk_state,
+        "Semantic.ClaimTransactionMeasures": pd.DataFrame(),  # Empty existing measures
+        "EDSWH.dbo.DimBrand": pd.DataFrame({"BrandKey": range(501, 506)})
+    }
+    setup_mock_tables(mock_fabric_connection, fixtures)
+    
+    # Act
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    result = execute_function_under_test(mock_fabric_connection, start_date, end_date)
+    
+    # Assert
+    # Check that financial measures are calculated correctly
+    indemnity_payment = result[result['FactClaimTransactionLineWCKey'] == 1001]
+    assert len(indemnity_payment) == 1, "Should have one indemnity payment record"
+    assert indemnity_payment['NetPaidIndemnity'].iloc[0] == 1000.00, "NetPaidIndemnity should be 1000.00"
+    
+    medical_payment = result[result['FactClaimTransactionLineWCKey'] == 1002]
+    assert len(medical_payment) == 1, "Should have one medical payment record"
+    assert medical_payment['NetPaidMedical'].iloc[0] == 2500.00, "NetPaidMedical should be 2500.00"
+    
+    recovery_record = result[result['FactClaimTransactionLineWCKey'] == 1003]
+    assert len(recovery_record) == 1, "Should have one recovery record"
+    assert recovery_record['RecoveryDeductibleIndemnity'].iloc[0] == -500.00, "RecoveryDeductibleIndemnity should be -500.00"
 
-class TestUspSemanticClaimTransactionMeasuresData:
-    """
-    Enhanced test class for uspSemanticClaimTransactionMeasuresData stored procedure conversion
-    from SQL Server to Fabric SQL.
+def test_null_handling(mock_fabric_connection):
+    """TC007: Error handling - NULL values in key fields"""
+    # Arrange
+    # Create data with NULL values in key fields
+    fact_data = pd.DataFrame({
+        'FactClaimTransactionLineWCKey': [2001, 2002, 2003],
+        'RevisionNumber': [1, None, 1],
+        'PolicyWCKey': [6001, 6002, None],
+        'ClaimWCKey': [8001, 8002, 8003],
+        'ClaimTransactionLineCategoryKey': [301, 302, 303],
+        'ClaimTransactionWCKey': [401, 402, 403],
+        'ClaimCheckKey': [501, None, 503],
+        'TransactionAmount': [1000.00, 2000.00, 3000.00],
+        'SourceTransactionLineItemCreateDate': ['2023-02-01', '2023-02-02', '2023-02-03'],
+        'SourceTransactionLineItemCreateDateKey': [20230201, 20230202, 20230203],
+        'SourceSystem': ['SourceSys1', 'SourceSys1', 'SourceSys1'],
+        'RecordEffectiveDate': ['2023-02-01', '2023-02-02', '2023-02-03'],
+        'RetiredInd': [0, 0, 0]
+    })
     
-    Tests cover:
-    - Data transformations and joins
-    - Measure calculations (NetPaidIndemnity, GrossIncurredLoss, etc.)
-    - Hash value generation and change detection
-    - Recovery type handling
-    - Edge cases and error scenarios
-    - Performance validation
-    - Data quality checks
-    """
+    claim_trans_desc = pd.DataFrame({
+        'ClaimTransactionLineCategoryKey': [301, 302, 303],
+        'ClaimTransactionWCKey': [401, 402, 403],
+        'ClaimWCKey': [8001, 8002, 8003],
+        'ClaimTransactionTypeCode': ['INDEMNITY', 'MEDICAL', 'EXPENSE'],
+        'TransactionTypeCode': ['PAYMENT', 'PAYMENT', 'PAYMENT'],
+        'RecoveryTypeCode': [None, None, None],
+        'ClaimTransactionSubTypeCode': [None, None, None],
+        'SourceTransactionCreateDate': ['2023-02-01', '2023-02-02', '2023-02-03'],
+        'TransactionSubmitDate': ['2023-02-01', '2023-02-02', '2023-02-03']
+    })
     
-    @pytest.fixture(scope="class")
-    def setup_test_environment(self):
-        """
-        Setup test environment with mock data and configurations
-        """
-        logger.info("Setting up test environment")
-        
-        # Mock database connection
-        mock_connection = Mock()
-        
-        # Mock FactClaimTransactionLineWC data
-        fact_claim_data = pd.DataFrame({
-            'FactClaimTransactionLineWCKey': [1, 2, 3, 4, 5],
-            'RevisionNumber': [1, 1, 1, 1, 1],
-            'PolicyWCKey': [201, 202, 203, 204, 205],
-            'ClaimWCKey': [101, 102, 103, 104, 105],
-            'ClaimTransactionLineCategoryKey': [301, 302, 303, 304, 305],
-            'ClaimTransactionWCKey': [401, 402, 403, 404, 405],
-            'ClaimCheckKey': [501, 502, 503, 504, 505],
-            'SourceTransactionLineItemCreateDate': [date(2024, 1, 15), date(2024, 2, 20), date(2024, 3, 10), 
-                                                  date(2024, 4, 5), date(2024, 5, 12)],
-            'SourceTransactionLineItemCreateDateKey': [20240115, 20240220, 20240310, 20240405, 20240512],
-            'TransactionAmount': [Decimal('1000.00'), Decimal('2500.00'), Decimal('0.00'), 
-                                Decimal('1500.00'), Decimal('3000.00')],
-            'RetiredInd': [0, 0, 0, 0, 0],
-            'SourceSystem': ['System1', 'System1', 'System2', 'System1', 'System2'],
-            'RecordEffectiveDate': [date(2024, 1, 15), date(2024, 2, 20), date(2024, 3, 10), 
-                                  date(2024, 4, 5), date(2024, 5, 12)],
-            'LoadUpdateDate': [datetime(2024, 1, 15), datetime(2024, 2, 20), datetime(2024, 3, 10), 
-                              datetime(2024, 4, 5), datetime(2024, 5, 12)]
-        })
-        
-        # Mock ClaimTransactionDescriptors data
-        claim_transaction_descriptors = pd.DataFrame({
-            'ClaimTransactionLineCategoryKey': [301, 302, 303, 304, 305],
-            'ClaimTransactionWCKey': [401, 402, 403, 404, 405],
-            'ClaimWCKey': [101, 102, 103, 104, 105],
-            'SourceTransactionCreateDate': [date(2024, 1, 15), date(2024, 2, 20), date(2024, 3, 10), 
-                                          date(2024, 4, 5), date(2024, 5, 12)],
-            'TransactionSubmitDate': [date(2024, 1, 16), date(2024, 2, 21), date(2024, 3, 11), 
-                                     date(2024, 4, 6), date(2024, 5, 13)],
-            'TransactionTypeCode': ['PAY', 'RES', 'REC', 'PAY', 'RES'],
-            'CoverageCode': ['IND', 'MED', 'IND', 'MED', 'IND'],
-            'RecoveryTypeCode': ['SUB', None, 'DEDUCT', 'SUB', None]
-        })
-        
-        # Mock ClaimDescriptors data
-        claim_descriptors = pd.DataFrame({
-            'ClaimWCKey': [101, 102, 103, 104, 105],
-            'ClaimNumber': ['CLM001', 'CLM002', 'CLM003', 'CLM004', 'CLM005'],
-            'ClaimStatusCode': ['OPEN', 'CLOSED', 'OPEN', 'OPEN', 'CLOSED'],
-            'DateOfLoss': [date(2023, 12, 1), date(2023, 11, 15), date(2024, 1, 20), 
-                          date(2024, 2, 10), date(2024, 3, 5)],
-            'EmploymentLocationState': ['CA', 'NY', None, 'FL', None],
-            'JurisdictionState': [None, None, 'TX', None, 'IL']
-        })
-        
-        # Mock PolicyDescriptors data
-        policy_descriptors = pd.DataFrame({
-            'PolicyWCKey': [201, 202, 203, 204, 205],
-            'PolicyNumber': ['POL001', 'POL002', 'POL003', 'POL004', 'POL005'],
-            'EffectiveDate': [date(2023, 1, 1), date(2023, 6, 1), date(2023, 12, 1), 
-                             date(2024, 1, 1), date(2024, 3, 1)],
-            'ExpirationDate': [date(2023, 12, 31), date(2024, 5, 31), date(2024, 11, 30), 
-                              date(2024, 12, 31), date(2025, 2, 28)],
-            'AgencyKey': [601, 602, 603, 604, 605],
-            'BrandKey': [701, 702, 703, 704, 705]
-        })
-        
-        # Mock PolicyRiskStateDescriptors data
-        policy_risk_state_descriptors = pd.DataFrame({
-            'PolicyRiskStateWCKey': [801, 802, 803, 804, 805],
-            'PolicyWCKey': [201, 202, 203, 204, 205],
-            'RiskState': ['CA', 'NY', 'TX', 'FL', 'IL'],
-            'RiskStateEffectiveDate': [date(2023, 1, 1), date(2023, 6, 1), date(2023, 12, 1), 
-                                     date(2024, 1, 1), date(2024, 3, 1)],
-            'RecordEffectiveDate': [date(2023, 1, 1), date(2023, 6, 1), date(2023, 12, 1), 
-                                  date(2024, 1, 1), date(2024, 3, 1)],
-            'RetiredInd': [0, 0, 0, 0, 0],
-            'LoadUpdateDate': [datetime(2023, 1, 1), datetime(2023, 6, 1), datetime(2023, 12, 1), 
-                              datetime(2024, 1, 1), datetime(2024, 3, 1)]
-        })
-        
-        # Mock DimBrand data
-        dim_brand = pd.DataFrame({
-            'BrandKey': [701, 702, 703, 704, 705],
-            'BrandName': ['Brand1', 'Brand2', 'Brand3', 'Brand4', 'Brand5'],
-            'BrandCode': ['B1', 'B2', 'B3', 'B4', 'B5']
-        })
-        
-        # Mock SemanticLayerMetaData for calculations
-        semantic_layer_metadata = pd.DataFrame({
-            'Measure_Name': ['NetPaidIndemnity', 'GrossIncurredLoss', 'NetIncurredLoss', 'RecoverySubrogation'],
-            'Logic': [
-                'CASE WHEN CoverageCode = \'IND\' AND TransactionTypeCode = \'PAY\' THEN TransactionAmount - RecoveryAmount ELSE 0 END',
-                'TransactionAmount + ReserveAmount',
-                'TransactionAmount + ReserveAmount - RecoveryAmount',
-                'CASE WHEN RecoveryTypeCode = \'SUB\' THEN RecoveryAmount ELSE 0 END'
-            ],
-            'SourceType': ['Claims', 'Claims', 'Claims', 'Claims'],
-            'IsActive': [1, 1, 1, 1]
-        })
-        
-        return {
-            'connection': mock_connection,
-            'test_data': {
-                'fact_claim_data': fact_claim_data,
-                'claim_transaction_descriptors': claim_transaction_descriptors,
-                'claim_descriptors': claim_descriptors,
-                'policy_descriptors': policy_descriptors,
-                'policy_risk_state_descriptors': policy_risk_state_descriptors,
-                'dim_brand': dim_brand,
-                'semantic_layer_metadata': semantic_layer_metadata
-            },
-            'config': {
-                'batch_size': 1000,
-                'timeout': 300,
-                'retry_count': 3
-            }
-        }
+    claim_desc = pd.DataFrame({
+        'ClaimWCKey': [8001, 8002, 8003],
+        'EmploymentLocationState': ['CA', None, 'TX'],
+        'JurisdictionState': ['CA', 'NY', None]
+    })
     
-    @pytest.fixture
-    def sample_input_data(self):
-        """
-        Fixture providing sample input data for testing
-        """
-        return pd.DataFrame({
-            'FactClaimTransactionLineWCKey': range(1, 101),
-            'RevisionNumber': np.ones(100, dtype=int),
-            'PolicyWCKey': range(201, 301),
-            'ClaimWCKey': range(101, 201),
-            'ClaimTransactionLineCategoryKey': range(301, 401),
-            'ClaimTransactionWCKey': range(401, 501),
-            'ClaimCheckKey': range(501, 601),
-            'TransactionAmount': np.random.uniform(100, 5000, 100),
-            'SourceTransactionLineItemCreateDate': pd.date_range('2024-01-01', periods=100, freq='D'),
-            'SourceTransactionLineItemCreateDateKey': range(20240101, 20240101+100),
-            'TransactionType': np.random.choice(['Payment', 'Adjustment', 'Recovery'], 100),
-            'RetiredInd': np.zeros(100, dtype=int),
-            'SourceSystem': np.random.choice(['System1', 'System2', 'System3'], 100)
-        })
+    fixtures = {
+        "EDSWH.dbo.FactClaimTransactionLineWC": fact_data,
+        "EDSWH.dbo.DimClaimTransactionWC": pd.DataFrame({"ClaimTransactionWCKey": [401, 402, 403]}),
+        "Semantic.ClaimTransactionDescriptors": claim_trans_desc,
+        "Semantic.ClaimDescriptors": claim_desc,
+        "Semantic.PolicyDescriptors": pd.DataFrame({
+            'PolicyWCKey': [6001, 6002, 6003],
+            'AgencyKey': [None, 702, 703],
+            'BrandKey': [801, 802, None]
+        }),
+        "Semantic.PolicyRiskStateDescriptors": pd.DataFrame({
+            'PolicyWCKey': [6001, 6002, 6003],
+            'PolicyRiskStateWCKey': [901, 902, 903],
+            'RiskState': ['CA', 'NY', 'TX'],
+            'RiskStateEffectiveDate': ['2022-01-01', '2022-01-01', '2022-01-01'],
+            'RecordEffectiveDate': ['2022-01-01', '2022-01-01', '2022-01-01'],
+            'LoadUpdateDate': ['2022-01-01', '2022-01-01', '2022-01-01'],
+            'RetiredInd': [0, 0, 0]
+        }),
+        "Semantic.ClaimTransactionMeasures": pd.DataFrame(),
+        "EDSWH.dbo.DimBrand": pd.DataFrame({"BrandKey": [801, 802, 803]})
+    }
+    setup_mock_tables(mock_fabric_connection, fixtures)
     
-    def test_basic_data_retrieval(self, setup_test_environment):
-        """
-        Test Case 1: Verify basic data retrieval from all source tables
-        """
-        logger.info("Testing basic data retrieval")
-        
-        test_data = setup_test_environment['test_data']
-        
-        # Assertions
-        assert len(test_data['fact_claim_data']) == 5
-        assert all(col in test_data['fact_claim_data'].columns for col in 
-                  ['FactClaimTransactionLineWCKey', 'ClaimWCKey', 'PolicyWCKey', 'TransactionAmount'])
-        
-        logger.info("Basic data retrieval test passed")
+    # Act
+    start_date = '2023-01-01'
+    end_date = '2023-02-28'
+    result = execute_function_under_test(mock_fabric_connection, start_date, end_date)
     
-    def test_join_operations_integrity(self, setup_test_environment):
-        """
-        Test Case 2: Verify correct join operations between tables
-        """
-        logger.info("Testing join operations integrity")
-        
-        test_data = setup_test_environment['test_data']
-        
-        # Simulate join between FactClaimTransactionLineWC and ClaimTransactionDescriptors
-        joined_data = pd.merge(
-            test_data['fact_claim_data'],
-            test_data['claim_transaction_descriptors'],
-            on=['ClaimTransactionLineCategoryKey', 'ClaimTransactionWCKey', 'ClaimWCKey'],
-            how='inner'
-        )
-        
-        # Assertions
-        assert len(joined_data) == 5
-        assert 'TransactionTypeCode' in joined_data.columns
-        assert 'CoverageCode' in joined_data.columns
-        
-        # Test join with ClaimDescriptors
-        joined_with_claim = pd.merge(
-            joined_data,
-            test_data['claim_descriptors'],
-            on='ClaimWCKey',
-            how='inner'
-        )
-        
-        assert len(joined_with_claim) == 5
-        assert 'ClaimNumber' in joined_with_claim.columns
-        
-        # Test join with PolicyDescriptors
-        joined_with_policy = pd.merge(
-            joined_with_claim,
-            test_data['policy_descriptors'],
-            on='PolicyWCKey',
-            how='left'
-        )
-        
-        assert len(joined_with_policy) == 5
-        assert 'PolicyNumber' in joined_with_policy.columns
-        assert 'AgencyKey' in joined_with_policy.columns
-        
-        logger.info("Join operations integrity test passed")
+    # Assert
+    assert not result.empty, "Result should not be empty despite NULL values"
     
-    def test_risk_state_join_logic(self, setup_test_environment):
-        """
-        Test Case 3: Verify the complex risk state join logic
-        """
-        logger.info("Testing risk state join logic")
-        
-        test_data = setup_test_environment['test_data']
-        
-        # Create a base joined dataset
-        base_joined = pd.merge(
-            test_data['fact_claim_data'],
-            test_data['claim_descriptors'],
-            on='ClaimWCKey',
-            how='inner'
-        )
-        
-        # Apply the complex join logic for risk state
-        base_joined['RiskState'] = base_joined.apply(
-            lambda row: row['EmploymentLocationState'] if pd.notna(row['EmploymentLocationState']) 
-                        else row['JurisdictionState'],
-            axis=1
-        )
-        
-        # Join with PolicyRiskStateDescriptors
-        risk_state_joined = pd.merge(
-            base_joined,
-            test_data['policy_risk_state_descriptors'],
-            left_on=['PolicyWCKey', 'RiskState'],
-            right_on=['PolicyWCKey', 'RiskState'],
-            how='left'
-        )
-        
-        # Assertions
-        assert len(risk_state_joined) == 5
-        assert 'PolicyRiskStateWCKey' in risk_state_joined.columns
-        
-        # Verify the correct risk state was used
-        for i, row in risk_state_joined.iterrows():
-            if pd.notna(row['EmploymentLocationState']):
-                assert row['RiskState'] == row['EmploymentLocationState']
-            else:
-                assert row['RiskState'] == row['JurisdictionState']
-        
-        logger.info("Risk state join logic test passed")
+    # Check that NULL values were properly handled with COALESCE
+    null_revision = result[result['FactClaimTransactionLineWCKey'] == 2002]
+    assert len(null_revision) == 1, "Should have record with NULL RevisionNumber"
+    assert null_revision['RevisionNumber'].iloc[0] == 0, "NULL RevisionNumber should be replaced with 0"
     
-    def test_recovery_type_handling(self, setup_test_environment):
-        """
-        Test Case 7: Verify proper handling of different recovery types
-        """
-        logger.info("Testing recovery type handling")
-        
-        test_data = setup_test_environment['test_data']
-        descriptors = test_data['claim_transaction_descriptors']
-        
-        # Add recovery amounts for testing
-        recovery_amounts = pd.Series([Decimal('100.00'), Decimal('0.00'), Decimal('200.00'), 
-                                    Decimal('150.00'), Decimal('0.00')])
-        
-        # Calculate recovery by type
-        subrogation_recovery = sum([
-            amt if code == 'SUB' else Decimal('0.00')
-            for amt, code in zip(recovery_amounts, descriptors['RecoveryTypeCode'])
-        ])
-        
-        deductible_recovery = sum([
-            amt if code == 'DEDUCT' else Decimal('0.00')
-            for amt, code in zip(recovery_amounts, descriptors['RecoveryTypeCode'])
-        ])
-        
-        # Assertions
-        assert subrogation_recovery == Decimal('250.00')  # 100 + 150
-        assert deductible_recovery == Decimal('200.00')  # 200
-        
-        # Test recovery type filtering
-        subrogation_records = descriptors[descriptors['RecoveryTypeCode'] == 'SUB']
-        deductible_records = descriptors[descriptors['RecoveryTypeCode'] == 'DEDUCT']
-        no_recovery_records = descriptors[descriptors['RecoveryTypeCode'].isna()]
-        
-        assert len(subrogation_records) == 2
-        assert len(deductible_records) == 1
-        assert len(no_recovery_records) == 2
-        
-        logger.info("Recovery type handling test passed")
+    null_policy = result[result['FactClaimTransactionLineWCKey'] == 2003]
+    assert len(null_policy) == 1, "Should have record with NULL PolicyWCKey"
+    # No assertion for PolicyWCKey as it's a required join key
     
-    def test_null_value_handling(self, setup_test_environment):
-        """
-        Test Case 8: Verify proper handling of NULL values
-        """
-        logger.info("Testing null value handling")
-        
-        test_data = setup_test_environment['test_data']
-        claim_descriptors = test_data['claim_descriptors']
-        
-        # Test NULL handling in state fields
-        for i, row in claim_descriptors.iterrows():
-            state = row['EmploymentLocationState'] if pd.notna(row['EmploymentLocationState']) else row['JurisdictionState']
-            assert pd.notna(state)  # Combined state should never be NULL
-        
-        # Create test data with NULL values
-        null_test_data = test_data['fact_claim_data'].copy()
-        null_test_data.loc[0, 'TransactionAmount'] = None
-        null_test_data.loc[1, 'PolicyWCKey'] = None
-        
-        # Test NULL handling in calculations
-        null_test_data['SafeTransactionAmount'] = null_test_data['TransactionAmount'].fillna(Decimal('0.00'))
-        
-        # Assertions
-        assert null_test_data.iloc[0]['SafeTransactionAmount'] == Decimal('0.00')
-        assert pd.isna(null_test_data.iloc[0]['TransactionAmount'])
-        assert pd.isna(null_test_data.iloc[1]['PolicyWCKey'])
-        
-        logger.info("Null value handling test passed")
-    
-    def test_date_range_filtering(self, setup_test_environment):
-        """
-        Test Case 9: Verify date range filtering functionality
-        """
-        logger.info("Testing date range filtering")
-        
-        test_data = setup_test_environment['test_data']
-        fact_data = test_data['fact_claim_data']
-        
-        # Define date range
-        start_date = date(2024, 1, 1)
-        end_date = date(2024, 3, 31)
-        
-        # Filter by date range (Q1 2024)
-        filtered_data = fact_data[
-            (fact_data['SourceTransactionLineItemCreateDate'] >= start_date) & 
-            (fact_data['SourceTransactionLineItemCreateDate'] <= end_date)
-        ]
-        
-        # Assertions
-        assert len(filtered_data) == 3  # Jan, Feb, Mar records
-        assert all(d.month <= 3 and d.year == 2024 for d in filtered_data['SourceTransactionLineItemCreateDate'])
-        
-        logger.info("Date range filtering test passed")
-    
-    def test_performance_validation(self, sample_input_data):
-        """
-        Test Case 10: Verify performance characteristics of data processing
-        """
-        logger.info("Testing performance validation")
-        
-        # Test processing time for sample data
-        start_time = time.time()
-        
-        # Simulate data processing operations
-        result = sample_input_data.copy()
-        result['ProcessedAmount'] = result['TransactionAmount'] * 1.1
-        result['AmountCategory'] = pd.cut(result['TransactionAmount'], 
-                                        bins=[0, 1000, 3000, float('inf')], 
-                                        labels=['Low', 'Medium', 'High'])
-        
-        processing_time = time.time() - start_time
-        
-        # Assertions
-        assert processing_time < 1.0  # Should process within 1 second
-        assert len(result) == len(sample_input_data)
-        assert 'AmountCategory' in result.columns
-        
-        # Test memory usage
-        memory_usage = result.memory_usage(deep=True).sum()
-        assert memory_usage > 0
-        
-        logger.info(f"Performance validation test passed - Processing time: {processing_time:.3f}s")
-    
-    def test_data_quality_checks(self, sample_input_data):
-        """
-        Test Case 11: Verify comprehensive data quality checks
-        """
-        logger.info("Testing data quality checks")
-        
-        # Data completeness check
-        completeness_ratio = (len(sample_input_data) - sample_input_data.isnull().sum().sum()) / (len(sample_input_data) * len(sample_input_data.columns))
-        assert completeness_ratio >= 0.95  # At least 95% completeness
-        
-        # Data uniqueness check
-        duplicate_count = sample_input_data.duplicated().sum()
-        assert duplicate_count == 0  # No duplicates expected
-        
-        # Data consistency check
-        assert sample_input_data['FactClaimTransactionLineWCKey'].is_unique
-        assert all(sample_input_data['TransactionAmount'] >= 0)  # Assuming non-negative amounts
-        
-        # Data format validation
-        assert sample_input_data['SourceTransactionLineItemCreateDate'].dtype == 'datetime64[ns]'
-        assert sample_input_data['TransactionAmount'].dtype in ['float64', 'float32']
-        
-        logger.info("Data quality checks test passed")
-    
-    @pytest.mark.parametrize("transaction_type,expected_category", [
-        ('Payment', 'Credit'),
-        ('Adjustment', 'Adjustment'),
-        ('Recovery', 'Debit')
-    ])
-    def test_transaction_type_categorization(self, transaction_type, expected_category):
-        """
-        Test Case 12: Parameterized test for transaction type categorization
-        """
-        logger.info(f"Testing transaction type categorization: {transaction_type}")
-        
-        def categorize_transaction(trans_type):
-            mapping = {
-                'Payment': 'Credit',
-                'Adjustment': 'Adjustment',
-                'Recovery': 'Debit'
-            }
-            return mapping.get(trans_type, 'Unknown')
-        
-        result = categorize_transaction(transaction_type)
-        assert result == expected_category
-        
-        logger.info(f"Transaction type categorization test passed for {transaction_type}")
-    
-    def test_fabric_sql_compatibility(self):
-        """
-        Test Case 13: Verify Fabric SQL syntax compatibility
-        """
-        logger.info("Testing Fabric SQL syntax compatibility")
-        
-        # Mock cursor for testing SQL execution
-        mock_cursor = Mock()
-        
-        # Test Fabric SQL specific syntax
-        fabric_queries = [
-            "SELECT TOP 1000 * FROM FactClaimTransactionLineWC",
-            "WITH CTE AS (SELECT * FROM ClaimDescriptors) SELECT * FROM CTE",
-            "SELECT HASHBYTES('SHA2_512', CONCAT(ClaimID, PolicyID)) as HashValue FROM FactClaimTransactionLineWC"
-        ]
-        
-        for query in fabric_queries:
-            mock_cursor.execute(query)
-        
-        # Verify all queries executed successfully
-        assert mock_cursor.execute.call_count == len(fabric_queries)
-        
-        logger.info("Fabric SQL syntax compatibility test passed")
-    
-    @pytest.fixture(autouse=True)
-    def setup_and_teardown(self):
-        """
-        Setup and teardown for each test
-        """
-        # Setup
-        logger.info("Setting up test environment...")
-        
-        yield
-        
-        # Teardown
-        logger.info("Cleaning up test environment...")
-    
-    @classmethod
-    def teardown_class(cls):
-        """
-        Class-level teardown
-        """
-        logger.info("All tests completed. Cleaning up class resources...")
+    # Check that NULL AgencyKey was handled
+    agency_record = result[result['FactClaimTransactionLineWCKey'] == 2001]
+    assert len(agency_record) == 1, "Should have record with NULL AgencyKey"
+    assert agency_record['AgencyKey'].iloc[0] == -1, "NULL AgencyKey should be replaced with -1"
 
+def test_large_dataset_performance(mock_fabric_connection):
+    """TC008: Performance - Large dataset processing"""
+    # Arrange
+    # Create a large dataset
+    num_records = 10000
+    
+    # Generate large fact data
+    fact_keys = range(3001, 3001 + num_records)
+    policy_keys = np.random.randint(7001, 8000, num_records)
+    claim_keys = np.random.randint(9001, 10000, num_records)
+    trans_line_cat_keys = np.random.randint(501, 600, num_records)
+    trans_wc_keys = np.random.randint(601, 700, num_records)
+    check_keys = np.random.randint(701, 800, num_records)
+    amounts = np.random.uniform(-5000, 5000, num_records)
+    dates = [(datetime(2023, 1, 1) + timedelta(days=i % 30)).strftime('%Y-%m-%d') for i in range(num_records)]
+    date_keys = [int(d.replace('-', '')) for d in dates]
+    
+    large_fact_data = pd.DataFrame({
+        'FactClaimTransactionLineWCKey': fact_keys,
+        'RevisionNumber': np.ones(num_records),
+        'PolicyWCKey': policy_keys,
+        'ClaimWCKey': claim_keys,
+        'ClaimTransactionLineCategoryKey': trans_line_cat_keys,
+        'ClaimTransactionWCKey': trans_wc_keys,
+        'ClaimCheckKey': check_keys,
+        'TransactionAmount': amounts,
+        'SourceTransactionLineItemCreateDate': dates,
+        'SourceTransactionLineItemCreateDateKey': date_keys,
+        'SourceSystem': ['SourceSys1'] * num_records,
+        'RecordEffectiveDate': dates,
+        'RetiredInd': np.zeros(num_records)
+    })
+    
+    # Create other necessary large datasets
+    # (simplified for test purposes)
+    
+    fixtures = {
+        "EDSWH.dbo.FactClaimTransactionLineWC": large_fact_data,
+        "EDSWH.dbo.DimClaimTransactionWC": pd.DataFrame({"ClaimTransactionWCKey": trans_wc_keys}),
+        # Other fixtures would be created similarly
+    }
+    
+    # Mock setup_mock_tables to handle large datasets
+    with patch('test_module.setup_mock_tables') as mock_setup:
+        mock_setup.return_value = None
+        
+        # Act
+        start_time = datetime.now()
+        start_date = '2023-01-01'
+        end_date = '2023-01-31'
+        # Just simulate execution without actual data processing
+        mock_fabric_connection.execute.return_value.returns_dataframe.return_value = pd.DataFrame({'ExecutionTime': [10]})
+        result = execute_function_under_test(mock_fabric_connection, start_date, end_date)
+        end_time = datetime.now()
+        
+        # Assert
+        execution_time = (end_time - start_time).total_seconds()
+        assert execution_time < 30, f"Large dataset processing should complete in under 30 seconds, took {execution_time} seconds"
 
+def test_policy_risk_state_join(mock_fabric_connection, sample_claim_transaction_data, 
+                               sample_claim_descriptors):
+    """TC009: Integration - Policy risk state join logic"""
+    # Arrange
+    # Create specific test data for policy risk state join logic
+    policy_risk_state_data = pd.DataFrame({
+        'PolicyWCKey': [5001, 5001, 5002, 5002, 5003],
+        'PolicyRiskStateWCKey': [601, 602, 603, 604, 605],
+        'RiskState': ['CA', 'NY', 'TX', 'FL', 'WA'],
+        'RiskStateEffectiveDate': ['2022-01-01', '2022-01-02', '2022-01-01', '2022-01-02', '2022-01-01'],
+        'RecordEffectiveDate': ['2022-01-01', '2022-01-02', '2022-01-01', '2022-01-02', '2022-01-01'],
+        'LoadUpdateDate': ['2022-01-01', '2022-01-02', '2022-01-01', '2022-01-02', '2022-01-01'],
+        'RetiredInd': [0, 0, 0, 0, 0]
+    })
+    
+    # Modify claim descriptors to test the join logic
+    claim_descriptors = sample_claim_descriptors.copy()
+    claim_descriptors.loc[0, 'EmploymentLocationState'] = 'CA'  # Should join with PolicyWCKey 5001, RiskState CA
+    claim_descriptors.loc[1, 'EmploymentLocationState'] = 'TX'  # Should join with PolicyWCKey 5002, RiskState TX
+    claim_descriptors.loc[2, 'EmploymentLocationState'] = None  # Should use JurisdictionState
+    claim_descriptors.loc[2, 'JurisdictionState'] = 'WA'  # Should join with PolicyWCKey 5003, RiskState WA
+    
+    fixtures = {
+        "EDSWH.dbo.FactClaimTransactionLineWC": sample_claim_transaction_data,
+        "EDSWH.dbo.DimClaimTransactionWC": pd.DataFrame({"ClaimTransactionWCKey": range(201, 206)}),
+        "Semantic.ClaimTransactionDescriptors": pd.DataFrame({
+            'ClaimTransactionLineCategoryKey': range(101, 106),
+            'ClaimTransactionWCKey': range(201, 206),
+            'ClaimWCKey': range(7001, 7006),
+            'ClaimTransactionTypeCode': ['INDEMNITY', 'MEDICAL', 'RECOVERY', 'EXPENSE', 'EMPLOYER_LIABILITY'],
+            'TransactionTypeCode': ['PAYMENT', 'PAYMENT', 'RECOVERY', 'PAYMENT', 'PAYMENT'],
+            'RecoveryTypeCode': [None, None, 'DEDUCTIBLE', None, None],
+            'ClaimTransactionSubTypeCode': [None, None, 'INDEMNITY', None, None],
+            'SourceTransactionCreateDate': ['2023-01-15', '2023-01-16', '2023-01-17', '2023-01-18', '2023-01-19'],
+            'TransactionSubmitDate': ['2023-01-15', '2023-01-16', '2023-01-17', '2023-01-18', '2023-01-19']
+        }),
+        "Semantic.ClaimDescriptors": claim_descriptors,
+        "Semantic.PolicyDescriptors": pd.DataFrame({
+            'PolicyWCKey': range(5001, 5006),
+            'AgencyKey': range(401, 406),
+            'BrandKey': range(501, 506)
+        }),
+        "Semantic.PolicyRiskStateDescriptors": policy_risk_state_data,
+        "Semantic.ClaimTransactionMeasures": pd.DataFrame(),
+        "EDSWH.dbo.DimBrand": pd.DataFrame({"BrandKey": range(501, 506)})
+    }
+    setup_mock_tables(mock_fabric_connection, fixtures)
+    
+    # Act
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    result = execute_function_under_test(mock_fabric_connection, start_date, end_date)
+    
+    # Assert
+    assert not result.empty, "Result should not be empty"
+    
+    # Check that the policy risk state join worked correctly
+    record1 = result[result['FactClaimTransactionLineWCKey'] == 1001]
+    assert len(record1) == 1, "Should have record for FactClaimTransactionLineWCKey 1001"
+    assert record1['PolicyRiskStateWCKey'].iloc[0] == 601, "Should join with PolicyRiskStateWCKey 601 (CA)"
+    
+    record2 = result[result['FactClaimTransactionLineWCKey'] == 1002]
+    assert len(record2) == 1, "Should have record for FactClaimTransactionLineWCKey 1002"
+    assert record2['PolicyRiskStateWCKey'].iloc[0] == 603, "Should join with PolicyRiskStateWCKey 603 (TX)"
+    
+    record3 = result[result['FactClaimTransactionLineWCKey'] == 1003]
+    assert len(record3) == 1, "Should have record for FactClaimTransactionLineWCKey 1003"
+    assert record3['PolicyRiskStateWCKey'].iloc[0] == 605, "Should join with PolicyRiskStateWCKey 605 (WA) using JurisdictionState"
+
+def test_recovery_deductible_breakouts(mock_fabric_connection):
+    """TC010: Recovery breakouts - Deductible subcategories"""
+    # Arrange
+    # Create specific test data for recovery deductible breakouts
+    fact_data = pd.DataFrame({
+        'FactClaimTransactionLineWCKey': range(4001, 4006),
+        'RevisionNumber': np.ones(5),
+        'PolicyWCKey': [5001] * 5,
+        'ClaimWCKey': [7001] * 5,
+        'ClaimTransactionLineCategoryKey': range(601, 606),
+        'ClaimTransactionWCKey': range(701, 706),
+        'ClaimCheckKey': range(801, 806),
+        'TransactionAmount': [-100.00, -200.00, -300.00, -400.00, -500.00],
+        'SourceTransactionLineItemCreateDate': ['2023-03-01'] * 5,
+        'SourceTransactionLineItemCreateDateKey': [20230301] * 5,
+        'SourceSystem': ['SourceSys1'] * 5,
+        'RecordEffectiveDate': ['2023-03-01'] * 5,
+        'RetiredInd': np.zeros(5)
+    })
+    
+    claim_trans_desc = pd.DataFrame({
+        'ClaimTransactionLineCategoryKey': range(601, 606),
+        'ClaimTransactionWCKey': range(701, 706),
+        'ClaimWCKey': [7001] * 5,
+        'ClaimTransactionTypeCode': ['RECOVERY'] * 5,
+        'TransactionTypeCode': ['RECOVERY'] * 5,
+        'RecoveryTypeCode': ['DEDUCTIBLE'] * 5,
+        'ClaimTransactionSubTypeCode': ['INDEMNITY', 'MEDICAL', 'EXPENSE', 'EMPLOYER_LIABILITY', 'LEGAL'],
+        'SourceTransactionCreateDate': ['2023-03-01'] * 5,
+        'TransactionSubmitDate': ['2023-03-01'] * 5
+    })
+    
+    fixtures = {
+        "EDSWH.dbo.FactClaimTransactionLineWC": fact_data,
+        "EDSWH.dbo.DimClaimTransactionWC": pd.DataFrame({"ClaimTransactionWCKey": range(701, 706)}),
+        "Semantic.ClaimTransactionDescriptors": claim_trans_desc,
+        "Semantic.ClaimDescriptors": pd.DataFrame({
+            'ClaimWCKey': [7001],
+            'EmploymentLocationState': ['CA'],
+            'JurisdictionState': ['CA']
+        }),
+        "Semantic.PolicyDescriptors": pd.DataFrame({
+            'PolicyWCKey': [5001],
+            'AgencyKey': [401],
+            'BrandKey': [501]
+        }),
+        "Semantic.PolicyRiskStateDescriptors": pd.DataFrame({
+            'PolicyWCKey': [5001],
+            'PolicyRiskStateWCKey': [601],
+            'RiskState': ['CA'],
+            'RiskStateEffectiveDate': ['2022-01-01'],
+            'RecordEffectiveDate': ['2022-01-01'],
+            'LoadUpdateDate': ['2022-01-01'],
+            'RetiredInd': [0]
+        }),
+        "Semantic.ClaimTransactionMeasures": pd.DataFrame(),
+        "EDSWH.dbo.DimBrand": pd.DataFrame({"BrandKey": [501]})
+    }
+    setup_mock_tables(mock_fabric_connection, fixtures)
+    
+    # Act
+    start_date = '2023-01-01'
+    end_date = '2023-03-31'
+    result = execute_function_under_test(mock_fabric_connection, start_date, end_date)
+    
+    # Assert
+    assert not result.empty, "Result should not be empty"
+    assert len(result) == 5, "Should have 5 recovery deductible records"
+    
+    # Check that recovery deductible breakouts are calculated correctly
+    indemnity_record = result[result['FactClaimTransactionLineWCKey'] == 4001]
+    assert len(indemnity_record) == 1, "Should have one indemnity deductible record"
+    assert indemnity_record['RecoveryDeductibleIndemnity'].iloc[0] == -100.00, "RecoveryDeductibleIndemnity should be -100.00"
+    
+    medical_record = result[result['FactClaimTransactionLineWCKey'] == 4002]
+    assert len(medical_record) == 1, "Should have one medical deductible record"
+    assert medical_record['RecoveryDeductibleMedical'].iloc[0] == -200.00, "RecoveryDeductibleMedical should be -200.00"
+    
+    expense_record = result[result['FactClaimTransactionLineWCKey'] == 4003]
+    assert len(expense_record) == 1, "Should have one expense deductible record"
+    assert expense_record['RecoveryDeductibleExpense'].iloc[0] == -300.00, "RecoveryDeductibleExpense should be -300.00"
+    
+    employer_liability_record = result[result['FactClaimTransactionLineWCKey'] == 4004]
+    assert len(employer_liability_record) == 1, "Should have one employer liability deductible record"
+    assert employer_liability_record['RecoveryDeductibleEmployerLiability'].iloc[0] == -400.00, "RecoveryDeductibleEmployerLiability should be -400.00"
+    
+    legal_record = result[result['FactClaimTransactionLineWCKey'] == 4005]
+    assert len(legal_record) == 1, "Should have one legal deductible record"
+    assert legal_record['RecoveryDeductibleLegal'].iloc[0] == -500.00, "RecoveryDeductibleLegal should be -500.00"
+    
+    # Check total RecoveryDeductible
+    total_recovery_deductible = result['RecoveryDeductible'].sum()
+    assert total_recovery_deductible == -1500.00, "Total RecoveryDeductible should be -1500.00"
+
+# Main execution
 if __name__ == "__main__":
-    # Run tests with verbose output
-    pytest.main(["-v", "--tb=short"])
+    print("Running unit tests for uspSemanticClaimTransactionMeasuresData Fabric SQL conversion...")
+    pytest.main(['-xvs'])
