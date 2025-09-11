@@ -268,3 +268,19 @@ class ConversionTestHarness:
             
             # Determine if test passed
             passed = data_matches and not warnings
+            
+            return TestResult(
+                test_case=test_case,
+                passed=passed,
+                execution_time_sql_server=sql_server_time,
+                execution_time_fabric=fabric_time,
+                performance_diff_percent=perf_diff_percent,
+                row_count_sql_server=row_count_sql_server,
+                row_count_fabric=row_count_fabric,
+                column_count_sql_server=column_count_sql_server,
+                column_count_fabric=column_count_fabric,
+                data_hash_sql_server=sql_server_hash,
+                data_hash_fabric=fabric_hash,
+                data_matches=data_matches,
+                warnings=warnings
+            )
