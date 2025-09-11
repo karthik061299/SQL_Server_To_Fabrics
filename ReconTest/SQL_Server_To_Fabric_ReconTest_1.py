@@ -235,3 +235,48 @@ class SQLServerToFabricReconTest:
             self.logger.error(f"Error uploading to blob storage: {str(e)}")
             self.results['errors'].append(f"Blob storage upload error: {str(e)}")
             return False
+    
+    def create_fabric_external_table(self, table_name: str, blob_path: str) -> bool:
+        """
+        Create external table in Fabric pointing to blob storage
+        
+        Args:
+            table_name (str): Name of the external table
+            blob_path (str): Path to the blob storage file
+            
+        Returns:
+            bool: True if table created successfully, False otherwise
+        """
+        try:
+            cursor = self.fabric_conn.cursor()
+            
+            # Drop table if exists
+            drop_query = f"DROP TABLE IF EXISTS {table_name}"
+            cursor.execute(drop_query)
+            
+            # Create external table
+            create_table_query = f"""
+            CREATE TABLE {table_name}
+            WITH (
+                LOCATION = '{blob_path}',
+                DATA_SOURCE = ExternalDataSource,
+                FILE_FORMAT = ParquetFileFormat
+            )
+            AS SELECT * FROM OPENROWSET(
+                BULK '{blob_path}',
+                DATA_SOURCE = 'ExternalDataSource',
+                FORMAT = 'PARQUET'
+            ) AS [result]
+            """
+            
+            cursor.execute(create_table_query)
+            cursor.commit()
+            
+            self.logger.info(f"External table {table_name} created successfully")
+            cursor.close()
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error creating external table: {str(e)}")
+            self.results['errors'].append(f"External table creation error: {str(e)}")
+            return False
