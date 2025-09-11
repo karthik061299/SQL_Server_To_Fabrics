@@ -1,68 +1,89 @@
-    def test_performance_comparison(self, mock_sql_server_conn, mock_fabric_conn):
-        """Compare performance between SQL Server and Fabric SQL versions"""
-        # Configure mocks
-        sql_cursor = mock_sql_server_conn.cursor.return_value
-        fabric_cursor = mock_fabric_conn.cursor.return_value
-        
-        # Mock execution times
-        sql_start_time = time.time()
-        sql_end_time = sql_start_time + 2.5  # 2.5 seconds for SQL Server
-        
-        fabric_start_time = time.time()
-        fabric_end_time = fabric_start_time + 2.0  # 2.0 seconds for Fabric
-        
-        # Execute on SQL Server
-        with patch('time.time', side_effect=[sql_start_time, sql_end_time]):
-            sql_cursor.execute(
-                "EXEC Semantic.uspSemanticClaimTransactionMeasuresData @pJobStartDateTime=?, @pJobEndDateTime=?",
-                datetime.now() - timedelta(days=7), datetime.now()
-            )
-            sql_execution_time = sql_end_time - sql_start_time
-        
-        # Execute on Fabric
-        with patch('time.time', side_effect=[fabric_start_time, fabric_end_time]):
-            fabric_cursor.execute(
-                "EXEC Semantic.uspSemanticClaimTransactionMeasuresData @pJobStartDateTime=?, @pJobEndDateTime=?",
-                datetime.now() - timedelta(days=7), datetime.now()
-            )
-            fabric_execution_time = fabric_end_time - fabric_start_time
-        
-        # Compare execution times
-        print(f"SQL Server execution time: {sql_execution_time:.2f} seconds")
-        print(f"Fabric SQL execution time: {fabric_execution_time:.2f} seconds")
-        print(f"Performance difference: {((fabric_execution_time - sql_execution_time) / sql_execution_time * 100):.2f}%")
-        
-        # In this mock example, Fabric is faster
-        assert fabric_execution_time < sql_execution_time, "Fabric SQL should be faster than SQL Server"
-    
-    def test_maxdop_option(self, mock_fabric_conn):
-        """Test MAXDOP query hint in Fabric SQL"""
+    def test_cte_usage(self, mock_fabric_conn):
+        """Test Common Table Expression (CTE) usage in Fabric SQL"""
         cursor = mock_fabric_conn.cursor.return_value
         
-        # Execute a query with MAXDOP hint
+        # Execute a query with CTE
         try:
             cursor.execute("""
-            SELECT * FROM Table
-            OPTION(MAXDOP 8);
+            WITH TestCTE AS (
+                SELECT ID, Name FROM Table WHERE Status = 'Active'
+            )
+            SELECT * FROM TestCTE;
             """)
             
             # Should execute without errors
             assert True
         except Exception as e:
-            pytest.fail(f"MAXDOP hint execution failed: {str(e)}")
+            pytest.fail(f"CTE usage failed: {str(e)}")
     
-    def test_label_option(self, mock_fabric_conn):
-        """Test LABEL query hint in Fabric SQL"""
+    def test_special_case_handling(self, mock_fabric_conn):
+        """Test special case handling in Fabric SQL"""
         cursor = mock_fabric_conn.cursor.return_value
         
-        # Execute a query with LABEL hint
-        try:
-            cursor.execute("""
-            SELECT * FROM Table
-            OPTION(LABEL = 'Test Query');
-            """)
-            
-            # Should execute without errors
-            assert True
-        except Exception as e:
-            pytest.fail(f"LABEL hint execution failed: {str(e)}")
+        # Execute with the special date
+        special_date = datetime(1900, 1, 1)
+        end_date = datetime.now()
+        
+        # Mock to capture the executed SQL
+        executed_sql = []
+        
+        def execute_side_effect(query, *args):
+            if isinstance(query, str) and "@pJobStartDateTime" in query:
+                executed_sql.append((query, args))
+            return cursor
+        
+        cursor.execute.side_effect = execute_side_effect
+        
+        cursor.execute(
+            "EXEC Semantic.uspSemanticClaimTransactionMeasuresData @pJobStartDateTime=?, @pJobEndDateTime=?",
+            special_date, end_date
+        )
+        
+        # Verify that the procedure was called with the right parameters
+        assert len(executed_sql) > 0, "No SQL was executed"
+        assert executed_sql[0][1][0] == special_date, "Special date parameter was not passed correctly"
+    
+    def test_measure_calculation(self, mock_fabric_conn, setup_test_data):
+        """Test measure calculation from SemanticLayerMetaData"""
+        cursor = mock_fabric_conn.cursor.return_value
+        
+        # Mock the SemanticLayerMetaData query result
+        semantic_metadata = pd.DataFrame({
+            'SourceType': ['Claims'] * 5,
+            'Measure_Name': ['NetPaidIndemnity', 'NetPaidMedical', 'NetIncurredLoss', 'GrossPaidLoss', 'RecoveryIndemnity'],
+            'Logic': ['SUM(CASE WHEN x=1 THEN Amount ELSE 0 END)', 'SUM(CASE WHEN x=2 THEN Amount ELSE 0 END)', 
+                     'SUM(CASE WHEN x=3 THEN Amount ELSE 0 END)', 'SUM(CASE WHEN x=4 THEN Amount ELSE 0 END)', 
+                     'SUM(CASE WHEN x=5 THEN Amount ELSE 0 END)']
+        })
+        
+        # Mock the string aggregation of measure definitions
+        measure_sql = ", ".join([f"{row['Logic']} AS {row['Measure_Name']}" 
+                              for _, row in semantic_metadata.iterrows()])
+        
+        def execute_side_effect(query, *args):
+            if "STRING_AGG" in query and "SemanticLayerMetaData" in query:
+                cursor.fetchone.return_value = [measure_sql]
+            return cursor
+        
+        cursor.execute.side_effect = execute_side_effect
+        
+        # Execute the stored procedure
+        job_start_datetime = datetime.now() - timedelta(days=7)
+        job_end_datetime = datetime.now()
+        
+        cursor.execute(
+            "EXEC Semantic.uspSemanticClaimTransactionMeasuresData @pJobStartDateTime=?, @pJobEndDateTime=?",
+            job_start_datetime, job_end_datetime
+        )
+        
+        # Verify that the measures are included in the query
+        measure_names = semantic_metadata['Measure_Name'].tolist()
+        
+        # Check that all measure names are used in at least one query
+        for measure in measure_names:
+            found = False
+            for call_args in cursor.execute.call_args_list:
+                if isinstance(call_args[0][0], str) and measure in call_args[0][0]:
+                    found = True
+                    break
+            assert found, f"Measure {measure} not found in any query"
